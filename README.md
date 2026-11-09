@@ -4,27 +4,66 @@ An in-game performance overlay for the PS5, delivered as a single homebrew
 payload: frame rate, frame times and CPU / GPU / memory load drawn on top of
 any running game.
 
-![fps-monitor panel over Tekken 8 at a locked 60 FPS](docs/screenshots/tekken8-fight.jpg)
+![fps-monitor panel and frame-time graph over a Tekken 8 fight at a locked 60 FPS](docs/screenshots/tekken8-fight.jpg)
 
 ## Screenshots
 
-| PS5 game: Tekken 8 title screen | PS4 game: Red Dead Redemption 2 |
+Captured on a PS5 with the default settings.
+
+The image above is a Tekken 8 fight at a locked 60: flat frame times, 95 % on
+target, session stats after 1:59.
+
+| Tekken 8 main menu (PS5) | Red Dead Redemption 2 (PS4) | Tekken 8 cutscene (PS5) |
+| --- | --- | --- |
+| ![Panel at a 60 FPS target in the Tekken 8 menu; two short drops show as amber bars and ticks](docs/screenshots/tekken8-menu.jpg) | ![Panel on a PS4 title at its 30 FPS target; slow stretches show amber in the FPS chart and the stability bar](docs/screenshots/rdr2-ps4.jpg) | ![Cutscene with frame-time spikes up to 185 ms in the bottom graph, values printed in red](docs/screenshots/tekken8-cutscene.jpg) |
+| Short drops show as amber bars with ticks under them; STABILITY stays at 90 % on target. | PS4 games are measured too. The PS4 pill and TARGET 30 are detected automatically. | Stalls past the graph's scale print their length in red (MAX 184.7 ms). |
+
+## The overlay at a glance
+
+Layout illustrations of each part of the overlay. The numbers are examples.
+
+| Panel, on target | Panel, during a drop |
 | --- | --- |
-| ![Panel at 60 FPS target; LOW shown in red and the FPS chart marks frame drops in orange](docs/screenshots/tekken8-title.jpg) | ![Panel on a PS4 title running in backward compatibility at its 30 FPS target](docs/screenshots/rdr2-ps4.jpg) |
-| Frame drops below the 60 FPS target turn the LOW value red and the chart bars orange. | PS4 games are measured too; the target is detected automatically (here 30 FPS). |
+| <img src="docs/ui/ui-panel.png" alt="Panel layout at a locked 60 FPS: header with PS5 and TARGET 60 pills, 60 FPS with AVG and LOW over the last 10 s, FRAME time, session row, FPS and frame-time charts, stability bar, CPU, GPU and memory row, and the github.com/rawalakshay footer" width="340"> | <img src="docs/ui/ui-panel-drop.png" alt="The same panel during a drop: 44 FPS in red, a red HITCH 240 ms badge, red and amber bars, and the stability bar at 85 % on target" width="340"> |
+
+**Frame-time graph** (`frame_graph=true`, the default): 7.5 s of frame times centred along the bottom of the screen.
+
+<img src="docs/ui/ui-graph.png" alt="Frame-time graph: FRAME TIME, LAST 7.5 S, MAX 240.0 ms, a row of blue bars with one 240 ms stall labelled in red" width="100%">
+
+**Compact strip** (`detail=compact`): the same numbers in one row along the top edge.
+
+<img src="docs/ui/ui-strip.png" alt="Compact strip: 60 FPS, FRAME 16.8 ms, AVG 59.9, LOW 59.0, MAX 16.9 ms, a mini frame-time chart, CPU 21 % 72° and GPU 57° 97 W" width="100%">
+
+**Themes** (`theme=`): classic, mono, aurora and vice.
+
+<img src="docs/ui/ui-themes.png" alt="Four theme swatches: classic in blue, mono in grey and white, aurora in cyan with a left edge bar, vice in pink with a pink and orange top bar" width="100%">
 
 ## Features
 
 - **Four detail levels**
   - `minimal`: a small FPS pill.
-  - `compact`: one line with FPS and system load.
-  - `panel` (default): a corner panel with a large FPS number, AVG / LOW, a
-    10 s FPS chart and a CPU / GPU / memory row.
+  - `compact`: one strip with FPS, frame time, AVG, LOW, MAX frame time, a
+    mini frame-time chart and CPU / GPU temperatures.
+  - `panel` (default): a corner panel with a large FPS number, AVG / LOW over
+    the last 10 s, the current frame time, a session row, a 10 s FPS chart, a
+    frame-time chart, a stability bar and a CPU / GPU / memory row.
   - `full`: currently the same as `panel` (reserved).
 - **FPS, AVG and LOW** for the current game session. A new game, or the same
   game relaunched, starts a fresh session.
-- **Charts**: a 10 s FPS chart and a frame-time chart in the panel, plus an
-  optional 7.5 s frame-time graph along the bottom edge of the screen.
+- **Window labels**: every number says what it covers (FPS over 0.5 s, AVG /
+  LOW over the last 10 s, chart bars of 0.25 s).
+- **Session row**: session time, session AVG and LOW, the share of time below
+  target and the number of drops.
+- **Hitch badge**: a red `HITCH` value when a frame in the last second takes
+  longer than 100 ms.
+- **Platform pill**: `PS4` or `PS5` next to the detected FPS target.
+- **Charts**: a 10 s FPS chart with drop ticks under the bars that miss the
+  target, a frame-time chart in the panel, and a stability bar that splits the
+  last 10 s into on target, slow and drop.
+- **Frame-time graph**: a 7.5 s graph centred along the bottom edge of the
+  screen (the top edge when the overlay sits at the bottom), on by default.
+  Frames past the chart's scale print their value in red.
+- **Themes**: `classic` (default), `mono`, `aurora` and `vice` colour palettes.
 - **System row**: CPU usage and temperature, GPU temperature and power draw,
   and memory in use.
 - **Placement**: top or bottom edge, left / center / right, adjustable margin,
@@ -90,10 +129,12 @@ values fall back to the default.
 | `edge` | `top`, `bottom` | `top` | Screen edge the overlay is anchored to. |
 | `align` | `left`, `center`, `right` | `left` | Position along that edge. |
 | `font_size` | `small`, `medium`, `large` | `medium` | Overlay text size. |
-| `opacity` | `0`, `40`, `65`, `85` | `65` | Background opacity in percent; `0` hides the background. |
-| `margin` | `0`, `5`, `10`, `20` | `10` | Gap from the screen edges, in pixels. |
-| `system` | `true`, `false` | `true` | CPU / GPU / memory row (`compact`, `panel`, `full`). |
-| `frame_graph` | `true`, `false` | `false` | 7.5 s frame-time graph along the bottom edge (every level). |
+| `opacity` | `0`, `40`, `65`, `85` | `85` | Background opacity in percent; `0` hides the background. |
+| `margin` | `0`, `5`, `10`, `20` | `20` | Gap from the screen edges, in pixels. |
+| `system` | `true`, `false` | `true` | CPU / GPU / memory row (`panel`, `full`); CPU and GPU cells in `compact`. |
+| `frame_graph` | `true`, `false` | `true` | 7.5 s frame-time graph along the bottom edge (every level). |
+| `frame_graph_opacity` | `0`, `40`, `65`, `85` | `85` | Background opacity of the frame-time graph, in percent. |
+| `theme` | `classic`, `mono`, `aurora`, `vice` | `classic` | Colour palette. `aurora` adds a cyan edge bar, `vice` a pink and orange top bar. |
 | `fps_pill` | `true`, `false` | `false` | Also show the FPS pill in the opposite corner (`compact`, `panel`, `full`). |
 | `brand` | `true`, `false` | `false` | Show the "4aLse Benchmarks" header on the panel. |
 
@@ -108,7 +149,8 @@ detail=compact
 edge=bottom
 align=right
 opacity=40
-frame_graph=true
+frame_graph=false
+theme=aurora
 ```
 
 The overlay is always on while the payload runs, so `enabled=false` has no
@@ -174,6 +216,7 @@ On Windows, build from a WSL shell. `.gitattributes` keeps `*.sh` files LF.
 | `third_party/` | cJSON, SHA-1. |
 | `scripts/build.sh` | Build script. |
 | `docs/screenshots/` | README screenshots. |
+| `docs/ui/` | README layout illustrations. |
 
 ## Credits
 

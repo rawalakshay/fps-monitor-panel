@@ -181,7 +181,7 @@ inline const char *overlay_detail_name(int detail) {
 
 /** Background opacity in percent; 0 hides the background. */
 inline constexpr std::array<int, 4> kOverlayOpacityOptions = {0, 40, 65, 85};
-inline constexpr int kOverlayOpacityDefault = 65;
+inline constexpr int kOverlayOpacityDefault = 85;
 
 inline constexpr bool overlay_opacity_valid(int pct) {
   for (int option : kOverlayOpacityOptions) {
@@ -191,9 +191,29 @@ inline constexpr bool overlay_opacity_valid(int pct) {
   return false;
 }
 
+/** Colour theme of the fps-monitor overlay (overlay_scene.hpp Theme order). */
+inline constexpr int kOverlayThemeClassic = 0;
+inline constexpr int kOverlayThemeMono = 1;
+inline constexpr int kOverlayThemeAurora = 2;
+inline constexpr int kOverlayThemeVice = 3;
+inline constexpr int kOverlayThemeDefault = kOverlayThemeClassic;
+
+inline const char *overlay_theme_name(int theme) {
+  switch (theme) {
+  case kOverlayThemeMono:
+    return "mono";
+  case kOverlayThemeAurora:
+    return "aurora";
+  case kOverlayThemeVice:
+    return "vice";
+  default:
+    return "classic";
+  }
+}
+
 /** Gap in pixels between the overlay and the screen edges it hugs. */
 inline constexpr std::array<int, 4> kOverlayMarginOptions = {0, 5, 10, 20};
-inline constexpr int kOverlayMarginDefault = 10;
+inline constexpr int kOverlayMarginDefault = 20;
 
 inline constexpr bool overlay_margin_valid(int px) {
   for (int option : kOverlayMarginOptions) {
@@ -386,9 +406,13 @@ struct Settings {
   /** CPU / GPU / memory row under the charts (compact, panel and full). */
   bool overlay_system = true;
   /** 7.5 s frame-time graph along the bottom edge (every level). */
-  bool overlay_frame_graph = false;
+  bool overlay_frame_graph = true;
+  /** The graph's own background opacity; one of kOverlayOpacityOptions. */
+  int overlay_frame_graph_opacity = kOverlayOpacityDefault;
   /** Edge gap in pixels; one of kOverlayMarginOptions. */
   int overlay_margin = kOverlayMarginDefault;
+  /** kOverlayTheme*: classic, mono, aurora or vice. */
+  int overlay_theme = kOverlayThemeDefault;
 
   // [shortcuts]
   int cheats_shortcut_opt = 0;

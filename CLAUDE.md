@@ -7,8 +7,9 @@ in-game performance overlay inside SceShellUI: FPS, AVG/LOW, FPS and frame-time
 charts, and a CPU/GPU/memory row. The overlay design comes from onionHEN 0.9.0.
 GPL-3.0. Upstream credits live only in the README Credits section.
 
-Not a desktop/web app — it runs on a PS5 via the console's ELF loader. There is
-no test suite to run locally; verification is a successful cross-compile.
+Not a desktop/web app — it runs on a PS5 via the console's ELF loader.
+Verification is a successful cross-compile plus the host layout tests
+(`scripts/test.sh`, pure `overlay_scene.hpp` only); nothing replaces a console run.
 
 ## Build
 
@@ -20,6 +21,9 @@ Requires Linux or WSL (build from WSL on Windows) with the
 export PS5_PAYLOAD_SDK=/opt/ps5-payload-sdk
 ./scripts/build.sh            # Release; flags: --debug, --release, --jobs N, --build-dir DIR
 ```
+
+Host tests for the pure layout (`overlay_scene.hpp`, no SDK needed):
+`./scripts/test.sh` (add `--render [DIR]` for PNG renders; needs `rsvg-convert`).
 
 `build.sh` invokes `prospero-cmake` on `source/` with Ninja, then builds the
 `fps_monitor` target. CMake entry point is `source/CMakeLists.txt`; project-wide

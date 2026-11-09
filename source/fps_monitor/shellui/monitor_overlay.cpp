@@ -329,7 +329,7 @@ void sample_fps() {
     g_fps_start_s = now;
     g_timeline.reset();
     g_history = scene::Histories{};
-    g_fps_target.reset();
+    g_fps_target.reset(scene::infer_target(sample.fps));
     g_frame_window.reset();
     g_fps_last_bucket_ms = 0;
     g_synth_ns = 0;
@@ -339,8 +339,10 @@ void sample_fps() {
     r.fps_avg = sample.fps;
     r.fps_low = sample.fps;
     r.fps_target = scene::infer_target(sample.fps);
+    r.session.reset();
   }
   g_fps_last_valid_s = now;
+  r.session_s = static_cast<int>(now - g_fps_start_s);
 
   /* Daemons that publish the running frame count feed the timeline
    * directly; for older ones, integrate the smoothed rate per new publish. */
@@ -403,6 +405,8 @@ void sample_fps() {
     if (low > 0.0f)
       r.fps_low = low;
     r.fps_target = g_fps_target.update(r.fps_avg);
+    if (bucket_fps >= 0.0f)
+      r.session.add(bucket_fps, r.fps_target);
   }
 }
 
@@ -504,6 +508,9 @@ void scene_render() {
   o.fps_pill = g_settings.overlay_fps_pill;
   o.show_system = g_settings.overlay_system;
   o.frame_graph = g_settings.overlay_frame_graph;
+  o.graph_opacity = g_settings.overlay_frame_graph_opacity;
+  /* kOverlayTheme* values follow the scene::Theme order. */
+  o.theme = static_cast<scene::Theme>(g_settings.overlay_theme);
   o.margin = static_cast<float>(g_settings.overlay_margin);
   overlay_scene_apply(scene::build_scene(o, r, g_history));
 }
@@ -519,6 +526,8 @@ void overlay_scene_reset_state() {
   g_fps_last_bucket_ms = 0;
   g_synth_ns = 0;
   g_readings.fps_valid = false;
+  g_readings.session.reset();
+  g_readings.session_s = 0;
   g_readings.sys = scene::SystemReadings{};
 }
 

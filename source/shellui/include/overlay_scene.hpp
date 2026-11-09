@@ -2,7 +2,8 @@
  *
  * Game performance overlay layout, three looks:
  *   Minimal  status dot + FPS pill
- *   Compact  one strip: FPS, frame time, AVG, LOW, mini frame-time chart
+ *   Compact  one strip: FPS, frame time, AVG, LOW, MAX, mini frame-time
+ *            chart, CPU / GPU
  *   Panel    corner panel: big FPS, AVG / LOW, FPS chart (10 s) and
  *            frame-time chart (one bar per frame sample); Full = Panel
  *
@@ -48,13 +49,50 @@ constexpr Rgba hex(uint32_t rgb, float a = 1.0f) {
 
 constexpr Rgba with_alpha(Rgba c, float a) { return {c.r, c.g, c.b, a}; }
 
-/* Palette. */
-inline constexpr Rgba kText = hex(0xEEF2F5);
+/** overlay.theme; palettes from capture-fps-app. */
+enum class Theme : uint8_t { Classic, Mono, Aurora, Vice };
+/** Decoration drawn on every box: none, a bar down the left, or a two-tone
+ *  bar along the top. */
+enum class Accent : uint8_t { None, Left, Top };
+
+struct Palette {
+  uint32_t surface_rgb;
+  Rgba text, heading, label, good, warn, bad;
+  Accent accent;
+};
+
+inline constexpr Palette palette(Theme t) {
+  switch (t) {
+  case Theme::Mono:
+    /* White bars; colour only when something misses the target. */
+    return {0x0A0C0F,      hex(0xEEF2F5), hex(0xC9D0D6),
+            hex(0xA7B0B8), hex(0xEEF2F5, 0.55f), hex(0xF5B13D),
+            hex(0xF2545B), Accent::None};
+  case Theme::Aurora:
+    return {0x080C16,      hex(0xE6FBFF), hex(0xA5F3FC), hex(0xCBD5E1),
+            hex(0x22D3EE), hex(0xFBBF24), hex(0xFB7185), Accent::Left};
+  case Theme::Vice:
+    return {0x150A24,      hex(0xFDF2F8), hex(0xE9D5FF), hex(0xC4B5FD),
+            hex(0xFF4FA3), hex(0xFF8A3D), hex(0xFF3344), Accent::Top};
+  case Theme::Classic:
+  default:
+    return {0x0B0E13,      hex(0xEEF2F5), hex(0xC9D0D6), hex(0xA7B0B8),
+            hex(0x5AA9E6), hex(0xF5B13D), hex(0xFF7A59), Accent::None};
+  }
+}
+
+/* The active palette. build_scene() switches it for one call (ThemeScope),
+ * so the k* colours below follow the theme without threading a palette
+ * through every builder. Single-threaded: only the ShellUI render loop
+ * builds scenes. */
+inline Palette g_palette = palette(Theme::Classic);
+
+inline const Rgba &kText = g_palette.text;
 /** Sub-headings: FPS, AVG, LOW, chart captions, MIN / MAX. */
-inline constexpr Rgba kHeading = hex(0xC9D0D6);
+inline const Rgba &kHeading = g_palette.heading;
 /** Dim text: title id, target pill, units. */
-inline constexpr Rgba kLabel = hex(0xA7B0B8);
-inline constexpr uint32_t kSurfaceRgb = 0x0B0E13;
+inline const Rgba &kLabel = g_palette.label;
+inline const uint32_t &kSurfaceRgb = g_palette.surface_rgb;
 inline constexpr Rgba kHairline = hex(0xFFFFFF, 0.09f);
 inline constexpr Rgba kSeparator = hex(0xFFFFFF, 0.14f);
 inline constexpr Rgba kPillFill = hex(0xFFFFFF, 0.08f);
@@ -62,9 +100,21 @@ inline constexpr Rgba kBaseline = hex(0x3A434C);
 inline constexpr Rgba kTargetLine = hex(0xEEF2F5, 0.45f);
 inline constexpr Rgba kGuideLine = hex(0xEEF2F5, 0.22f);
 /* State colours differ in lightness as well as hue. */
-inline constexpr Rgba kGood = hex(0x5AA9E6);
-inline constexpr Rgba kWarn = hex(0xF5B13D);
-inline constexpr Rgba kBad = hex(0xFF7A59);
+inline const Rgba &kGood = g_palette.good;
+inline const Rgba &kWarn = g_palette.warn;
+inline const Rgba &kBad = g_palette.bad;
+
+/** Sets g_palette for its lifetime, then restores the previous one. */
+class ThemeScope {
+public:
+  explicit ThemeScope(Theme t) : saved_(g_palette) { g_palette = palette(t); }
+  ~ThemeScope() { g_palette = saved_; }
+  ThemeScope(const ThemeScope &) = delete;
+  ThemeScope &operator=(const ThemeScope &) = delete;
+
+private:
+  Palette saved_;
+};
 /* System row bars: a dim track with a neutral fill. */
 inline constexpr Rgba kTrack = hex(0xFFFFFF, 0.10f);
 inline constexpr Rgba kFill = hex(0xC9D2E0);
@@ -183,7 +233,12 @@ public:
     return target_;
   }
   int target() const { return target_; }
-  void reset() { *this = TargetTracker(hold_); }
+  /* Seed with the session's first reading so a 30/40 FPS cap is not judged
+   * against 60 for the hold period. */
+  void reset(int target = 60) {
+    *this = TargetTracker(hold_);
+    target_ = target;
+  }
 
 private:
   int hold_;
@@ -221,6 +276,129 @@ private:
   int head_ = 0;
   int count_ = 0;
 };
+
+/**
+ * Whole-session numbers, fed once per 250 ms FPS bucket. Fixed size: LOW
+ * comes from an integer histogram of bucket FPS (0 .. kMaxFps), so a long
+ * session never grows memory.
+ */
+class SessionStats {
+public:
+  static constexpr int kMaxFps = 240;
+
+  void add(float fps, int target) {
+    if (!std::isfinite(fps) || fps < 0.0f)
+      return;
+    ++n_;
+    sum_ += fps;
+    ++hist_[static_cast<size_t>(
+        std::clamp(static_cast<int>(std::lround(fps)), 0, kMaxFps))];
+    const FpsState st = fps_state(fps, target);
+    if (st != FpsState::Good)
+      ++below_;
+    const bool drop = st == FpsState::Bad;
+    if (drop && !in_drop_)
+      ++drops_;
+    in_drop_ = drop;
+  }
+  void reset() { *this = SessionStats{}; }
+
+  int buckets() const { return static_cast<int>(n_); }
+  /** Mean of the buckets; < 0 when empty. */
+  float avg() const {
+    return n_ ? static_cast<float>(sum_ / static_cast<double>(n_)) : -1.0f;
+  }
+  /** 1st percentile of bucket FPS, whole FPS; < 0 when empty. */
+  float low() const {
+    if (!n_)
+      return -1.0f;
+    const uint32_t need = std::max<uint32_t>(1u, (n_ + 99u) / 100u);
+    uint32_t seen = 0;
+    for (int f = 0; f <= kMaxFps; ++f) {
+      seen += hist_[static_cast<size_t>(f)];
+      if (seen >= need)
+        return static_cast<float>(f);
+    }
+    return static_cast<float>(kMaxFps);
+  }
+  /** Share of buckets under 95 % of target, 0..100; < 0 when empty. */
+  float below_pct() const {
+    return n_ ? 100.0f * static_cast<float>(below_) / static_cast<float>(n_)
+              : -1.0f;
+  }
+  /** Times the rate fell under 80 % of target. */
+  int drops() const { return static_cast<int>(drops_); }
+
+private:
+  std::array<uint32_t, kMaxFps + 1> hist_{};
+  uint32_t n_ = 0;
+  double sum_ = 0.0;
+  uint32_t below_ = 0;
+  uint32_t drops_ = 0;
+  bool in_drop_ = false;
+};
+
+/** "PS4" for a CUSA title id, "PS5" for PPSA, "" otherwise. */
+inline const char *platform_label(const std::string &title_id) {
+  if (title_id.rfind("CUSA", 0) == 0)
+    return "PS4";
+  if (title_id.rfind("PPSA", 0) == 0)
+    return "PS5";
+  return "";
+}
+
+/** A frame long enough to call out: over max(100 ms, 3 × target frame time). */
+inline bool is_hitch(float frame_ms_max, int target) {
+  const float t = 1000.0f / static_cast<float>(target > 0 ? target : 60);
+  return frame_ms_max > std::max(100.0f, 3.0f * t);
+}
+
+/** Indices of the (at most) `max_n` largest values over `limit`, in index
+ *  order; on a tie the older value wins. Frame-graph overflow labels. */
+inline std::vector<int> overflow_picks(const std::vector<float> &v,
+                                       float limit, int max_n) {
+  std::vector<int> idx;
+  for (int i = 0; i < static_cast<int>(v.size()); ++i)
+    if (v[static_cast<size_t>(i)] > limit)
+      idx.push_back(i);
+  std::stable_sort(idx.begin(), idx.end(), [&v](int a, int b) {
+    return v[static_cast<size_t>(a)] > v[static_cast<size_t>(b)];
+  });
+  idx.resize(std::min(idx.size(), static_cast<size_t>(std::max(max_n, 0))));
+  std::sort(idx.begin(), idx.end());
+  return idx;
+}
+
+/** FPS chart buckets by state: STABILITY bar. */
+struct Stability {
+  int on_target = 0; /* >= 95 % of target */
+  int slow = 0;      /* 80 .. 95 % */
+  int drop = 0;      /* < 80 % */
+  int total() const { return on_target + slow + drop; }
+  /** n as a rounded share of total, 0..100; 0 when empty. */
+  int pct(int n) const {
+    const int t = total();
+    return t > 0 ? static_cast<int>(std::lround(100.0 * n / t)) : 0;
+  }
+};
+
+template <int N> Stability count_stability(const Ring<N> &fps, int target) {
+  Stability s;
+  for (int i = 0; i < fps.size(); ++i) {
+    switch (fps_state(fps.at(i), target)) {
+    case FpsState::Good:
+      ++s.on_target;
+      break;
+    case FpsState::Warn:
+      ++s.slow;
+      break;
+    case FpsState::Bad:
+      ++s.drop;
+      break;
+    }
+  }
+  return s;
+}
 
 /* FPS chart: one bar per 250 ms, 10 s on screen. */
 inline constexpr int kBucketMs = 250;
@@ -489,6 +667,9 @@ struct Readings {
   /** Frame cap the colours and the target lines compare against. */
   int fps_target = 60;
   std::string title_id;
+  /** Whole play session: seconds since it started, and its bucket stats. */
+  int session_s = 0;
+  SessionStats session;
   /** CPU / GPU / MEM row; independent of fps_valid. */
   SystemReadings sys;
 };
@@ -522,7 +703,10 @@ struct Options {
    *  strip (overlay.system). Minimal never shows it. */
   bool show_system = true;
   /** Frame-time graph box along the bottom edge (overlay.frame_graph). */
-  bool frame_graph = false;
+  bool frame_graph = true;
+  /** The graph box's own background opacity (overlay.frame_graph_opacity). */
+  int graph_opacity = 85;
+  Theme theme = Theme::Classic;
 };
 
 enum class TextAlign : uint8_t { Left, Right };
@@ -601,12 +785,12 @@ struct Metrics {
     stat_pt = pt(21.0f);
     ft_pt = pt(16.0f);
     hero_pt = pt(58.0f);
-    strip_pt = pt(24.0f);
+    strip_pt = pt(36.0f);
     axis_pt = std::max(8, pt(9.0f));
     pill_pt = pt(22.0f);
     pad_x = px(13.0f);
     pad_y = px(12.0f);
-    panel_w = px(300.0f);
+    panel_w = px(340.0f);
     head_h = px(20.0f);
     hero_h = px(62.0f);
     caption_h = px(22.0f);
@@ -616,11 +800,11 @@ struct Metrics {
     col_gap = px(14.0f);
     fps_bar_gap = std::max(1.0f, px(2.0f));
     ft_bar_gap = 1.0f;
-    line_h = px(42.0f);
+    line_h = px(54.0f);
     gap = px(6.0f);
     sep_gap = px(12.0f);
     strip_chart_w = px(120.0f);
-    strip_chart_h = px(24.0f);
+    strip_chart_h = px(36.0f);
     dot = px(10.0f);
     sys_val_h = px(28.0f);
     sys_bar_h = std::max(2.0f, px(3.0f));
@@ -692,6 +876,13 @@ inline std::string fmt_temp(int celsius) {
 /** Watts, whole numbers: "65 W". */
 inline std::string fmt_watts(float w) {
   return detail::fmt("%.0f W", std::clamp(w, 0.0f, 999.0f));
+}
+/** Seconds → "m:ss"; minutes keep counting past 59. */
+inline std::string fmt_clock(int seconds) {
+  const int s = std::max(seconds, 0);
+  char buf[24];
+  std::snprintf(buf, sizeof(buf), "%d:%02d", s / 60, s % 60);
+  return buf;
 }
 /** MB → "9.6" (GB, one decimal). */
 inline std::string fmt_gb(int mb) {
@@ -774,6 +965,13 @@ inline void chrome(Scene &out, float w, float h, int opacity,
   out.rects.push_back({prefix + "edge_l", 0.0f, 1.0f, 1.0f, h - 2.0f, kHairline});
   out.rects.push_back(
       {prefix + "edge_r", w - 1.0f, 1.0f, 1.0f, h - 2.0f, kHairline});
+  if (g_palette.accent == Accent::Left && h > 28.0f) {
+    out.rects.push_back({prefix + "acc", 0.0f, 14.0f, 3.0f, h - 28.0f, kGood});
+  } else if (g_palette.accent == Accent::Top) {
+    const float half = std::round(w * 0.5f);
+    out.rects.push_back({prefix + "acc", 0.0f, 0.0f, half, 3.0f, kGood});
+    out.rects.push_back({prefix + "acc2", half, 0.0f, w - half, 3.0f, kWarn});
+  }
 }
 
 /** Anchor a w×h overlay on screen per edge / align / margin. */
@@ -943,7 +1141,7 @@ inline std::vector<Bar> frame_bars(const Ring<N> &ring, int target, int n) {
  * the bottom edge (the top edge when the overlay itself sits at the
  * bottom), a header with the window's MAX, and one bar per sample on a
  * 0 .. 3× target scale with guides at 1× and 2×. Appended to an already
- * placed scene like the FPS pill; the box uses the overlay opacity.
+ * placed scene like the FPS pill, with its own opacity.
  */
 inline void add_frame_graph(Scene &main, const Options &opt, const Readings &r,
                             const Histories &h) {
@@ -962,9 +1160,13 @@ inline void add_frame_graph(Scene &main, const Options &opt, const Readings &r,
   Scene content{};
   Builder b(m, content);
   const float y = px(10.0f), ch = m.caption_h;
-  b.text("id_osc_graph_l", x0, iw * 0.5f, y, ch,
-         std::string("FRAME TIME ") + kMidDot + " LAST 7.5 S", kHeading,
-         m.label_pt, kWeightLabel, TextAlign::Left, m.ft_pt);
+  b.text("id_osc_graph_l", x0, Builder::left_w("FRAME TIME", m.label_pt), y, ch,
+         "FRAME TIME", kHeading, m.label_pt, kWeightLabel, TextAlign::Left,
+         m.ft_pt);
+  const std::string sfx = std::string(" ") + kMidDot + " LAST 7.5 S";
+  b.text("id_osc_graph_sfx", x0 + advance("FRAME TIME", m.label_pt),
+         Builder::left_w(sfx, m.head_pt), y, ch, sfx, kLabel, m.head_pt,
+         kWeightLabel, TextAlign::Left, m.ft_pt);
   float rx = x0 + iw;
   const float uw = std::ceil(advance("ms", m.label_pt));
   b.text("id_osc_graph_u", rx - uw, uw + 2.0f, y, ch, "ms", kLabel, m.label_pt,
@@ -987,11 +1189,36 @@ inline void add_frame_graph(Scene &main, const Options &opt, const Readings &r,
          m.ft_bar_gap);
   b.rect("id_osc_graph_base", x0, bottom, iw, 1.0f, kBaseline);
   guide(b, m, "id_osc_graph_g1", x0, iw, bottom - std::round(gh / 3.0f),
-        kTargetLine, fmt_ms(target_ms), opt.opacity);
+        kTargetLine, fmt_ms(target_ms), opt.graph_opacity);
   guide(b, m, "id_osc_graph_g2", x0, iw, bottom - std::round(gh * 2.0f / 3.0f),
-        kGuideLine, fmt_ms(2.0f * target_ms), opt.opacity);
+        kGuideLine, fmt_ms(2.0f * target_ms), opt.graph_opacity);
+
+  /* Bars past the 3× scale print their value at the top, tallest 4 only.
+   * Ids follow the rank, not the slot, so a scrolling stall moves 4 cached
+   * widgets instead of creating one per slot it passes. */
+  if (r.fps_valid) {
+    std::vector<float> ms(static_cast<size_t>(h.long_ms.size()));
+    for (int i = 0; i < h.long_ms.size(); ++i)
+      ms[static_cast<size_t>(i)] = h.long_ms.at(i);
+    const std::vector<int> picks = overflow_picks(ms, 3.0f * target_ms, 4);
+    const float pitch = iw / static_cast<float>(kLongBars);
+    const float lh = std::round(static_cast<float>(m.axis_pt) * 1.3f);
+    for (size_t k = 0; k < picks.size(); ++k) {
+      const int s = kLongBars - h.long_ms.size() + picks[k];
+      const std::string t =
+          fmt("%.0f", std::min(ms[static_cast<size_t>(picks[k])], 99999.0f));
+      const float lw = std::ceil(advance(t, m.axis_pt)) + px(6.0f);
+      const float lx = std::clamp(x0 + std::round((s + 0.5f) * pitch - lw * 0.5f),
+                                  x0, x0 + iw - lw);
+      const std::string id = "id_osc_graph_ovf" + std::to_string(k);
+      b.rect(id, lx, top + 1.0f, lw, lh, hex(kSurfaceRgb, 0.86f));
+      b.text(id + "_t", lx + px(3.0f), lw, top + 1.0f, lh, t, kBad, m.axis_pt,
+             kWeightValue, TextAlign::Left, m.axis_pt);
+    }
+  }
 
   Options box = opt;
+  box.opacity = opt.graph_opacity;
   box.align = BarAlign::Center;
   box.margin = px(24.0f);
   box.edge = opt.edge == BarEdge::Bottom ? BarEdge::Top : BarEdge::Bottom;
@@ -1100,108 +1327,114 @@ inline float system_block(Builder &b, const Metrics &m, float x0, float iw,
 }
 
 /* ------------------------------------------------------------------ */
-/* Compact: 60 FPS | 16.7 ms  AVG 59.9  LOW 58.6  ▁▁▁▇▁▁              */
+/* Compact strip: 60 FPS | FRAME  AVG 10 S  LOW  MAX | ▁▁▇▁ | CPU  GPU     */
 /* ------------------------------------------------------------------ */
 
+/**
+ * capture-fps-app's Strip look: one bar, each item a small dim label over
+ * its value. Every cell reserves its worst-case width, so changing digits
+ * never move the cells after it.
+ */
 inline Scene build_compact(const Options &opt, const Readings &r,
                            const Histories &h) {
   const Metrics m(opt.font_pt);
   Scene content{};
   Builder b(m, content);
+  auto px = [&m](float v) { return std::round(v * m.k); };
   const float lh = m.line_h;
-  const float ug = std::round(4.0f * m.k);  /* value → its unit */
-  const float vg = std::round(12.0f * m.k); /* group → group */
-  float x = std::round(14.0f * m.k);
+  const float sh = m.strip_chart_h; /* label row + value row */
+  const float ly = std::round((lh - sh) * 0.5f), lr = px(14.0f);
+  const float vy = ly + lr, vr = sh - lr;
+  const float ug = px(4.0f);  /* value → its unit */
+  const float vg = px(14.0f); /* cell → cell */
+  const int target = r.fps_target;
+  const bool ok = r.fps_valid;
+  float x = px(14.0f);
 
-  const FpsState st = fps_state(r.fps, r.fps_target);
-  const float fw = slot_w({"888"}, m.strip_pt);
-  b.text("id_osc_fps_v", x, fw, 0.0f, lh, r.fps_valid ? fmt_fps(r.fps) : kDash,
-         r.fps_valid ? fps_value_color(st) : kText, m.strip_pt, kWeightHero,
-         TextAlign::Right, m.strip_pt);
-  x += fw + ug;
-  b.text("id_osc_fps_l", x, Builder::left_w("FPS", m.label_pt), 0.0f, lh, "FPS",
-         kHeading, m.label_pt, kWeightLabel, TextAlign::Left, m.strip_pt);
-  x += advance("FPS", m.label_pt) + m.sep_gap;
-  const float sh = std::round(24.0f * m.k);
-  b.rect("id_osc_sep0", x, std::round((lh - sh) * 0.5f), 1.0f, sh, kSeparator);
-  x += 1.0f + m.sep_gap;
-
-  const float vw = slot_w({"888.8"}, m.value_pt);
-  b.text("id_osc_ft_v", x, vw, 0.0f, lh,
-         r.fps_valid ? fmt_ms(r.frame_ms) : kDash, kText, m.value_pt,
-         kWeightValue, TextAlign::Right, m.strip_pt);
-  x += vw + ug;
-  b.text("id_osc_ft_u", x, Builder::left_w("ms", m.label_pt), 0.0f, lh, "ms",
-         kLabel, m.label_pt, kWeightLabel, TextAlign::Left, m.strip_pt);
-  x += advance("ms", m.label_pt) + vg;
-
-  auto stat = [&](const char *key, const char *label, float v, Rgba c) {
-    b.text(std::string("id_osc_") + key + "_l", x,
-           Builder::left_w(label, m.label_pt), 0.0f, lh, label, kHeading,
-           m.label_pt, kWeightLabel, TextAlign::Left, m.strip_pt);
-    x += advance(label, m.label_pt) + ug;
-    b.text(std::string("id_osc_") + key + "_v", x, vw, 0.0f, lh,
-           r.fps_valid ? fmt_fps1(v) : kDash, r.fps_valid ? c : kText,
-           m.value_pt, kWeightValue, TextAlign::Right, m.strip_pt);
-    x += vw + vg;
+  auto sep = [&](const char *id) {
+    x += m.sep_gap;
+    b.rect(id, x, ly, 1.0f, sh, kSeparator);
+    x += 1.0f + m.sep_gap;
   };
-  stat("avg", "AVG", r.fps_avg, fps_value_color(fps_state(r.fps_avg, r.fps_target)));
-  stat("low", low_label(r), r.fps_low,
-       fps_value_color(fps_state(r.fps_low, r.fps_target)));
+  /* Label over a left-aligned value, an optional small unit after it. */
+  auto cell = [&](const std::string &key, const std::string &label,
+                  const std::string &v, Rgba vc,
+                  std::initializer_list<const char *> worst,
+                  const std::string &unit, Rgba uc,
+                  std::initializer_list<const char *> unit_worst) {
+    const std::string p = "id_osc_" + key;
+    b.text(p + "_l", x, Builder::left_w(label, m.head_pt), ly, lr, label,
+           kLabel, m.head_pt, kWeightLabel, TextAlign::Left, m.head_pt);
+    b.text(p + "_v", x, Builder::left_w(v, m.value_pt), vy, vr, v, vc,
+           m.value_pt, kWeightValue, TextAlign::Left, m.value_pt);
+    float w = slot_w(worst, m.value_pt);
+    if (!unit.empty()) {
+      b.text(p + "_u", x + advance(v, m.value_pt) + ug,
+             Builder::left_w(unit, m.label_pt), vy, vr, unit, uc, m.label_pt,
+             kWeightLabel, TextAlign::Left, m.value_pt);
+      w += ug + slot_w(unit_worst, m.label_pt);
+    }
+    x += std::max(w, std::ceil(advance(label, m.head_pt)));
+  };
 
-  /* Mini frame-time chart. */
-  const float cw = m.strip_chart_w, ch = m.strip_chart_h;
-  const float bottom = std::round((lh + ch) * 0.5f);
-  if (r.fps_valid)
+  /* Hero, with FPS stacked over its window on the value baseline. */
+  const float fw = slot_w({"888"}, m.strip_pt);
+  b.text("id_osc_fps_v", x, fw, vy, vr, ok ? fmt_fps(r.fps) : kDash,
+         ok ? fps_value_color(fps_state(r.fps, target)) : kText, m.strip_pt,
+         kWeightHero, TextAlign::Right, m.value_pt);
+  x += fw + px(6.0f);
+  b.text("id_osc_fps_l", x, Builder::left_w("FPS", m.head_pt), ly, lr, "FPS",
+         kHeading, m.head_pt, kWeightLabel, TextAlign::Left, m.head_pt);
+  b.text("id_osc_fps_w", x, Builder::left_w("0.5 S", m.head_pt), vy, vr,
+         "0.5 S", kLabel, m.head_pt, kWeightLabel, TextAlign::Left,
+         m.value_pt);
+  x += std::ceil(advance("0.5 S", m.head_pt));
+  sep("id_osc_sep0");
+
+  cell("ft", "FRAME", ok ? fmt_ms(r.frame_ms) : kDash,
+       ok ? fps_value_color(fps_state(r.fps, target)) : kText, {"888.8"}, "ms",
+       kLabel, {"ms"});
+  x += vg;
+  cell("avg", "AVG 10 S", ok ? fmt_fps1(r.fps_avg) : kDash,
+       ok ? fps_value_color(fps_state(r.fps_avg, target)) : kText, {"888.8"},
+       "", kLabel, {});
+  x += vg;
+  cell("low", low_label(r), ok ? fmt_fps1(r.fps_low) : kDash,
+       ok ? fps_value_color(fps_state(r.fps_low, target)) : kText, {"888.8"},
+       "", kLabel, {});
+  x += vg;
+  const bool mx = ok && r.frame_ms_max >= 0.0f;
+  cell("mx", "MAX", mx ? fmt_ms(r.frame_ms_max) : kDash,
+       mx && is_hitch(r.frame_ms_max, target) ? kBad : kText, {"888.8"}, "ms",
+       kLabel, {"ms"});
+  sep("id_osc_sep1");
+
+  /* Mini frame-time chart, 0 .. 3× target. */
+  const float cw = m.strip_chart_w, bottom = ly + sh;
+  if (ok)
     bars(b, "id_osc_sbar", kStripBars,
-         frame_bars(h.frame_ms, r.fps_target, kStripBars), x, bottom, cw, ch,
+         frame_bars(h.frame_ms, target, kStripBars), x, bottom, cw, sh,
          m.ft_bar_gap);
   b.rect("id_osc_sbase", x, bottom, cw, 1.0f, kBaseline);
-  b.rect("id_osc_starget", x, bottom - std::round(ch / 3.0f), cw, 1.0f,
+  b.rect("id_osc_starget", x, bottom - std::round(sh / 3.0f), cw, 1.0f,
          kTargetLine);
   x += cw;
 
-  /* System groups: | CPU 42% 58° | GPU 61° 74 W | MEM 9.6 GB. Fixed slots so
-   * nothing shifts as the numbers change. */
   if (opt.show_system) {
     const SystemReadings &s = r.sys;
-    const float tail_w = slot_w({"100\xC2\xB0", "128 W", "GB"}, m.label_pt);
-    auto sep = [&](const char *id) {
-      x += m.sep_gap;
-      b.rect(id, x, std::round((lh - sh) * 0.5f), 1.0f, sh, kSeparator);
-      x += 1.0f + m.sep_gap;
-    };
-    auto group = [&](const char *key, const char *label, const std::string &v,
-                     Rgba vc, std::initializer_list<const char *> worst,
-                     const std::string &tail, Rgba tc, const char *tail_suffix) {
-      const std::string p = std::string("id_osc_s") + key;
-      b.text(p + "_l", x, Builder::left_w(label, m.label_pt), 0.0f, lh, label,
-             kHeading, m.label_pt, kWeightLabel, TextAlign::Left, m.strip_pt);
-      x += advance(label, m.label_pt) + ug;
-      const float w = slot_w(worst, m.value_pt);
-      b.text(p + "_v", x, w, 0.0f, lh, v, vc, m.value_pt, kWeightValue,
-             TextAlign::Right, m.strip_pt);
-      x += w + ug;
-      b.text(p + tail_suffix, x, tail_w, 0.0f, lh, tail, tc, m.label_pt,
-             kWeightLabel, TextAlign::Left, m.strip_pt);
-      x += tail_w;
-    };
-    sep("id_osc_sep1");
-    group("cpu", "CPU", s.cpu_valid ? fmt_pct(s.cpu_pct) : kDash,
-          s.cpu_valid && s.cpu_pct > kBarWarnPct ? kWarn : kText, {"100%"},
-          s.cpu_temp_valid ? fmt_temp(s.cpu_temp) : kDash,
-          s.cpu_temp_valid ? temp_color(s.cpu_temp, kCpuTempScale) : kLabel,
-          "_t");
     sep("id_osc_sep2");
-    group("gpu", "GPU", s.soc_temp_valid ? fmt_temp(s.soc_temp) : kDash,
-          s.soc_temp_valid ? temp_color(s.soc_temp, kGpuTempScale) : kText,
-          {"100\xC2\xB0"}, s.power_valid ? fmt_watts(s.gpu_power_w) : kDash,
-          kLabel, "_t");
-    sep("id_osc_sep3");
-    group("mem", "MEMORY", s.ram_valid ? fmt_gb(s.ram_used_mb) : kDash, kText,
-          {"88.8"}, "GB", kLabel, "_u");
+    cell("scpu", "CPU", s.cpu_valid ? fmt_pct(s.cpu_pct) : kDash,
+         s.cpu_valid && s.cpu_pct > kBarWarnPct ? kWarn : kText, {"100%"},
+         s.cpu_temp_valid ? fmt_temp(s.cpu_temp) : kDash,
+         s.cpu_temp_valid ? temp_color(s.cpu_temp, kCpuTempScale) : kLabel,
+         {"100\xC2\xB0"});
+    x += vg;
+    cell("sgpu", "GPU", s.soc_temp_valid ? fmt_temp(s.soc_temp) : kDash,
+         s.soc_temp_valid ? temp_color(s.soc_temp, kGpuTempScale) : kText,
+         {"100\xC2\xB0"}, s.power_valid ? fmt_watts(s.gpu_power_w) : kDash,
+         kLabel, {"128 W"});
   }
-  x += std::round(14.0f * m.k);
+  x += px(14.0f);
   return finish(opt, std::move(content), x, lh);
 }
 
@@ -1241,13 +1474,23 @@ inline Scene build_panel(const Options &opt, const Readings &r,
              opt.brand ? kWeightValue : kWeightLabel, TextAlign::Left,
              m.head_pt);
     if (r.fps_valid) {
-      const std::string pill = "TARGET " + std::to_string(target);
-      const float pw = std::ceil(advance(pill, m.head_pt)) + std::round(12.0f * m.k);
-      b.rect("id_osc_head_pill", x0 + iw - pw, y, pw, hh, kPillFill);
-      /* Right-aligned to the pill's inner edge. */
-      b.text("id_osc_head_r", x0 + iw - pw, pw - std::round(6.0f * m.k), y, hh,
-             pill, kLabel, m.head_pt, kWeightLabel, TextAlign::Right,
-             m.head_pt);
+      /* Pills right to left: [PS5] [TARGET 60]. */
+      float rx = x0 + iw;
+      auto pill = [&](const char *rect_id, const char *text_id,
+                      const std::string &text) {
+        const float pw =
+            std::ceil(advance(text, m.head_pt)) + std::round(12.0f * m.k);
+        b.rect(rect_id, rx - pw, y, pw, hh, kPillFill);
+        /* Right-aligned to the pill's inner edge. */
+        b.text(text_id, rx - pw, pw - std::round(6.0f * m.k), y, hh, text,
+               kLabel, m.head_pt, kWeightLabel, TextAlign::Right, m.head_pt);
+        rx -= pw + std::round(5.0f * m.k);
+      };
+      pill("id_osc_head_pill", "id_osc_head_r",
+           "TARGET " + std::to_string(target));
+      const std::string plat = platform_label(r.title_id);
+      if (!plat.empty())
+        pill("id_osc_head_plat", "id_osc_head_plat_t", plat);
     }
     y += hh + m.section_gap;
   }
@@ -1267,19 +1510,30 @@ inline Scene build_panel(const Options &opt, const Readings &r,
   /* Hero: 60 FPS ............ AVG  LOW / 59.8  52.3 */
   {
     const float hh = m.hero_h;
+    const float cw =
+        std::max(slot_w({"888.8"}, m.stat_pt), slot_w({"1% LOW"}, m.label_pt));
+    const float lx = x0 + iw - cw;               /* LOW column */
+    const float ax = lx - m.col_gap - cw;        /* AVG column */
+    /* Eyebrow over AVG / LOW; the hero tucks up under it. */
+    const float eh = std::round(14.0f * m.k);
+    b.text("id_osc_stat_w", ax, x0 + iw - ax, y, eh, "LAST 10 S", kLabel,
+           m.head_pt, kWeightLabel, TextAlign::Right, m.head_pt);
+    y += eh - std::round(4.0f * m.k);
+
     const FpsState st = fps_state(r.fps, target);
     const std::string fps = fmt_fps(r.fps);
     b.text("id_osc_fps_v", x0, Builder::left_w(fps, m.hero_pt), y, hh, fps,
            fps_value_color(st), m.hero_pt, kWeightHero, TextAlign::Left,
            m.hero_pt);
+    /* FPS stacked over its window, the window on the hero baseline. */
     const float ux = x0 + advance(fps, m.hero_pt) + std::round(6.0f * m.k);
-    b.text("id_osc_fps_l", ux, Builder::left_w("FPS", m.label_pt), y, hh, "FPS",
-           kHeading, m.label_pt, kWeightLabel, TextAlign::Left, m.hero_pt);
+    b.text("id_osc_fps_l", ux, Builder::left_w("FPS", m.label_pt),
+           y - std::round(14.0f * m.k), hh, "FPS", kHeading, m.label_pt,
+           kWeightLabel, TextAlign::Left, m.hero_pt);
+    b.text("id_osc_fps_w", ux, Builder::left_w("0.5 S", m.head_pt), y, hh,
+           "0.5 S", kLabel, m.head_pt, kWeightLabel, TextAlign::Left,
+           m.hero_pt);
 
-    const float cw =
-        std::max(slot_w({"888.8"}, m.stat_pt), slot_w({"1% LOW"}, m.label_pt));
-    const float lx = x0 + iw - cw;               /* LOW column */
-    const float ax = lx - m.col_gap - cw;        /* AVG column */
     const float top_h = std::round(hh * 0.42f);  /* labels */
     const float bot_h = hh - top_h;              /* values */
     b.text("id_osc_avg_l", ax, cw, y, top_h, "AVG", kHeading, m.label_pt,
@@ -1292,14 +1546,76 @@ inline Scene build_panel(const Options &opt, const Readings &r,
     b.text("id_osc_low_v", lx, cw, y + top_h, bot_h, fmt_fps1(r.fps_low),
            fps_value_color(fps_state(r.fps_low, target)), m.stat_pt,
            kWeightValue, TextAlign::Right, m.stat_pt);
-    y += hh + m.section_gap;
+    y += hh + m.chart_gap;
   }
 
-  /* FPS · LAST 10 S ............ MIN 44 · MAX 60, then the chart. */
+  /* FRAME 16.8 ms ............ HITCH 240 ms */
+  {
+    const float ch = m.caption_h;
+    const float ug = std::round(4.0f * m.k);
+    float x = x0;
+    b.text("id_osc_fr_l", x, Builder::left_w("FRAME", m.label_pt), y, ch,
+           "FRAME", kHeading, m.label_pt, kWeightLabel, TextAlign::Left,
+           m.ft_pt);
+    x += advance("FRAME", m.label_pt) + ug;
+    const std::string v = fmt_ms(r.frame_ms);
+    b.text("id_osc_fr_v", x, Builder::left_w(v, m.ft_pt), y, ch, v,
+           fps_value_color(fps_state(r.fps, target)), m.ft_pt, kWeightValue,
+           TextAlign::Left, m.ft_pt);
+    x += advance(v, m.ft_pt) + ug;
+    b.text("id_osc_fr_u", x, Builder::left_w("ms", m.label_pt), y, ch, "ms",
+           kLabel, m.label_pt, kWeightLabel, TextAlign::Left, m.ft_pt);
+    if (is_hitch(r.frame_ms_max, target))
+      b.text("id_osc_hitch", x0 + iw * 0.5f, iw * 0.5f, y, ch,
+             "HITCH " + fmt("%.0f", std::min(r.frame_ms_max, 99999.0f)) + " ms", kBad, m.label_pt,
+             kWeightValue, TextAlign::Right, m.ft_pt);
+    y += ch + m.chart_gap;
+  }
+
+  /* SESSION 4:12 | AVG 59.6 | LOW 52 | BELOW 3% | DROPS 2 */
+  {
+    b.rect("id_osc_ss_rule", x0, y, iw, 1.0f, kHairline);
+    y += 1.0f + m.chart_gap;
+    const SessionStats &s = r.session;
+    const bool have = s.buckets() > 0;
+    const float lh = std::round(14.0f * m.k), vh = std::round(20.0f * m.k);
+    const struct {
+      const char *label;
+      std::string value;
+      Rgba color;
+    } cols[5] = {
+        {"SESSION", fmt_clock(r.session_s), kText},
+        {"AVG", have ? fmt_fps1(s.avg()) : kDash,
+         have ? fps_value_color(fps_state(s.avg(), target)) : kText},
+        {"LOW", have ? fmt_fps(s.low()) : kDash,
+         have ? fps_value_color(fps_state(s.low(), target)) : kText},
+        {"BELOW", have ? fmt_pct(s.below_pct()) : kDash, kText},
+        {"DROPS", std::to_string(s.drops()), kText},
+    };
+    const float pitch = iw / 5.0f;
+    for (int i = 0; i < 5; ++i) {
+      const float cx = x0 + std::round(i * pitch);
+      const float w = x0 + std::round((i + 1) * pitch) - cx;
+      const TextAlign al = i == 0 ? TextAlign::Left : TextAlign::Right;
+      const std::string p = "id_osc_ss" + std::to_string(i);
+      b.text(p + "_l", cx, w, y, lh, cols[i].label, kLabel, m.head_pt,
+             kWeightLabel, al, m.head_pt);
+      b.text(p + "_v", cx, w, y + lh, vh, cols[i].value, cols[i].color,
+             m.ft_pt, kWeightValue, al, m.ft_pt);
+    }
+    y += lh + vh + m.section_gap;
+  }
+
+  /* FPS · LAST 10 S · 0.25 S ...... MIN 44 · MAX 60, then the chart. */
   {
     const float ch = m.caption_h;
     const std::string cap = std::string("FPS ") + kMidDot + " LAST 10 S";
     b.text("id_osc_fc_l", x0, iw * 0.55f, y, ch, cap, kHeading, m.label_pt,
+           kWeightLabel, TextAlign::Left, m.label_pt);
+    /* "SLICES" would run into MIN at panel width. */
+    const std::string sfx = std::string(" ") + kMidDot + " 0.25 S";
+    b.text("id_osc_fc_sfx", x0 + advance(cap, m.label_pt),
+           Builder::left_w(sfx, m.head_pt), y, ch, sfx, kLabel, m.head_pt,
            kWeightLabel, TextAlign::Left, m.label_pt);
     if (h.fps.size() > 0) {
       float lo = 1e9f, hi = 0.0f;
@@ -1340,10 +1656,26 @@ inline Scene build_panel(const Options &opt, const Readings &r,
     guide(b, m, "id_osc_ftarget", x0, iw,
           bottom - std::round(gh / 1.25f), kTargetLine, std::to_string(target),
           opt.opacity);
-    y = bottom + 1.0f + m.section_gap;
+    /* Drop ticks: a mark under each bar off target, on the bar's columns
+     * (same slot math as bars()). */
+    const float tick_y = bottom + 1.0f + std::round(2.0f * m.k);
+    const float tick_h = std::max(2.0f, std::round(3.0f * m.k));
+    const float pitch = iw / static_cast<float>(kFpsBars);
+    const int offset = kFpsBars - h.fps.size();
+    for (int i = 0; i < h.fps.size(); ++i) {
+      const FpsState st = fps_state(h.fps.at(i), target);
+      if (st == FpsState::Good)
+        continue;
+      const int s = offset + i;
+      const float tx0 = x0 + std::round(s * pitch);
+      const float tx1 = x0 + std::round((s + 1) * pitch) - m.fps_bar_gap;
+      b.rect("id_osc_ftick" + std::to_string(s), tx0, tick_y,
+             std::max(1.0f, tx1 - tx0), tick_h, fps_state_color(st));
+    }
+    y = tick_y + tick_h + m.section_gap;
   }
 
-  /* FRAME TIME ............ MAX 33.4   16.7 ms, then the chart. */
+  /* FRAME TIME .................. MAX 33.4 ms, then the chart. */
   {
     const float ch = m.caption_h;
     b.text("id_osc_tc_l", x0, iw * 0.5f, y, ch, "FRAME TIME", kHeading,
@@ -1353,11 +1685,6 @@ inline Scene build_panel(const Options &opt, const Readings &r,
     b.text("id_osc_ft_u", rx - uw, uw + 2.0f, y, ch, "ms", kLabel, m.label_pt,
            kWeightLabel, TextAlign::Right, m.ft_pt);
     rx -= uw + std::round(4.0f * m.k);
-    const float vw = slot_w({"888.8"}, m.ft_pt);
-    b.text("id_osc_ft_v", rx - vw, vw, y, ch, fmt_ms(r.frame_ms),
-           fps_value_color(fps_state(r.fps, target)), m.ft_pt, kWeightValue,
-           TextAlign::Right, m.ft_pt);
-    rx -= vw + std::round(10.0f * m.k);
     const float mvw = slot_w({"888.8"}, m.label_pt);
     b.text("id_osc_ft_max_v", rx - mvw, mvw, y, ch,
            r.frame_ms_max >= 0.0f ? fmt_ms(r.frame_ms_max) : kDash, kText,
@@ -1379,7 +1706,56 @@ inline Scene build_panel(const Options &opt, const Readings &r,
           kTargetLine, fmt_ms(target_ms), opt.opacity);
     guide(b, m, "id_osc_tg2", x0, iw, bottom - std::round(gh * 2.0f / 3.0f),
           kGuideLine, fmt_ms(2.0f * target_ms), opt.opacity);
-    y = bottom + 1.0f;
+    y = bottom + 1.0f + m.section_gap;
+  }
+
+  /* STABILITY · 10 S ........ ON TARGET 98%, then one 3-segment bar. */
+  {
+    const Stability st = count_stability(h.fps, target);
+    const int total = st.total();
+    const float ch = m.caption_h;
+    b.text("id_osc_st_l", x0, iw * 0.55f, y, ch,
+           std::string("STABILITY ") + kMidDot + " 10 S", kHeading, m.label_pt,
+           kWeightLabel, TextAlign::Left, m.label_pt);
+    const int on = st.pct(st.on_target);
+    const float vw = slot_w({"100%"}, m.label_pt);
+    const Rgba vc = total == 0 ? kText : on >= 95 ? kText : on >= 80 ? kWarn : kBad;
+    b.text("id_osc_st_on_v", x0 + iw - vw, vw, y, ch,
+           total > 0 ? std::to_string(on) + "%" : kDash, vc, m.label_pt,
+           kWeightValue, TextAlign::Right, m.label_pt);
+    const float ow = std::ceil(advance("ON TARGET", m.label_pt));
+    const float ox = x0 + iw - vw - std::round(4.0f * m.k) - ow;
+    b.text("id_osc_st_on_l", ox, ow + 2.0f, y, ch, "ON TARGET", kHeading,
+           m.label_pt, kWeightLabel, TextAlign::Right, m.label_pt);
+    y += ch + m.chart_gap;
+
+    const float bh = std::round(13.0f * m.k);
+    if (total == 0) {
+      b.rect("id_osc_st_track", x0, y, iw, bh, kTrack);
+    } else {
+      const struct {
+        int n;
+        Rgba color;
+        const char *label;
+      } segs[3] = {{st.on_target, kGood, "ON TARGET"},
+                   {st.slow, kWarn, "SLOW"},
+                   {st.drop, kBad, "DROP"}};
+      const float pad = std::round(4.0f * m.k);
+      int cum = 0;
+      for (int i = 0; i < 3; ++i) {
+        const float sx0 = x0 + std::round(iw * cum / total);
+        cum += segs[i].n;
+        const float sw = x0 + std::round(iw * cum / total) - sx0;
+        const std::string id = "id_osc_st_seg" + std::to_string(i);
+        b.rect(id, sx0, y, sw, bh, segs[i].color);
+        const std::string t =
+            std::string(segs[i].label) + " " + std::to_string(st.pct(segs[i].n)) + "%";
+        if (segs[i].n > 0 && advance(t, m.axis_pt) + 2.0f * pad <= sw)
+          b.text(id + "_t", sx0 + pad, sw - pad, y, bh, t, hex(kSurfaceRgb),
+                 m.axis_pt, kWeightValue, TextAlign::Left, m.axis_pt);
+      }
+    }
+    y += bh;
   }
 
   if (opt.show_system)
@@ -1399,6 +1775,7 @@ inline Scene build_scene(const Options &opt, const Readings &readings,
   if (!valid_screen_dimension(opt.screen_w) ||
       !valid_screen_dimension(opt.screen_h))
     return Scene{};
+  const ThemeScope theme(opt.theme);
   Scene s{};
   switch (opt.detail) {
   case Detail::Minimal:

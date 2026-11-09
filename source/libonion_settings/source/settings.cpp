@@ -583,6 +583,14 @@ int parse_overlay_detail(const char *s, int def) {
   return def;
 }
 
+int parse_overlay_theme(const char *s, int def) {
+  for (int theme = kOverlayThemeClassic; theme <= kOverlayThemeVice; ++theme) {
+    if (streq_ci(s, overlay_theme_name(theme)))
+      return theme;
+  }
+  return def;
+}
+
 int parse_overlay_opacity(const char *s, int def) {
   const int pct = parse_int_range(s, def, 0, 100);
   return overlay_opacity_valid(pct) ? pct : def;
@@ -840,8 +848,13 @@ bool apply_parser(IniParser *parser, Settings *out) {
       parse_bool(ini_get(parser, "overlay.system"), out->overlay_system);
   out->overlay_frame_graph = parse_bool(ini_get(parser, "overlay.frame_graph"),
                                         out->overlay_frame_graph);
+  out->overlay_frame_graph_opacity =
+      parse_overlay_opacity(ini_get(parser, "overlay.frame_graph_opacity"),
+                            out->overlay_frame_graph_opacity);
   out->overlay_margin = parse_overlay_margin(ini_get(parser, "overlay.margin"),
                                              out->overlay_margin);
+  out->overlay_theme = parse_overlay_theme(ini_get(parser, "overlay.theme"),
+                                           out->overlay_theme);
   out->cheats_shortcut_opt =
       parse_cheats_shortcut(ini_get(parser, "shortcuts.cheats_menu"),
                             out->cheats_shortcut_opt);
@@ -1049,9 +1062,16 @@ std::string settings_serialize(const Settings &in) {
   b += "# frame_graph shows the 7.5 s frame-time graph along the bottom edge.\n";
   b += "# Available values: true, false\n";
   b += "frame_graph=" + bool_text(in.overlay_frame_graph) + "\n";
+  b += "# frame_graph_opacity is the graph's background opacity in percent.\n";
+  b += "# Available values: 0, 40, 65, 85\n";
+  b += "frame_graph_opacity=" + std::to_string(in.overlay_frame_graph_opacity) +
+       "\n";
   b += "# margin is the gap from the screen edges, in pixels.\n";
   b += "# Available values: 0, 5, 10, 20\n";
   b += "margin=" + std::to_string(in.overlay_margin) + "\n";
+  b += "# theme picks the colours.\n";
+  b += "# Available values: classic, mono, aurora, vice\n";
+  b += "theme=" + std::string(overlay_theme_name(in.overlay_theme)) + "\n";
   b += "\n";
   b += "[shortcuts]\n";
   b += "# cheats_menu controls the shortcut that opens the cheats menu.\n";

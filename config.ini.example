@@ -20,24 +20,36 @@ align=left
 # Available values: small, medium, large
 font_size=medium
 # detail picks how much the monitor shows: an FPS pill, one compact
-# line, or a corner panel (full is currently the same as panel).
+# strip, or a corner panel (full is currently the same as panel). The panel
+# shows FPS with AVG / LOW over the last 10 s, the frame time (with a red
+# HITCH value for frames over 100 ms), a session row, the FPS and frame-time
+# charts, a stability bar and the system row.
 # Available values: minimal, compact, panel, full
 detail=panel
 # opacity is the background opacity in percent; 0 hides it.
 # Available values: 0, 40, 65, 85
-opacity=65
+opacity=85
+# theme picks the colours. aurora adds a cyan edge bar, vice a pink and
+# orange top bar.
+# Available values: classic, mono, aurora, vice
+theme=classic
 # brand shows the "4aLse Benchmarks" header on the panel.
 # Available values: true, false
 brand=false
 # fps_pill also shows the FPS pill in the opposite corner.
 # Available values: true, false
 fps_pill=false
-# system shows the CPU, GPU and memory row under the charts.
+# system shows the CPU, GPU and memory row under the charts (CPU and GPU
+# only in the compact strip).
 # Available values: true, false
 system=true
-# frame_graph shows the 7.5 s frame-time graph along the bottom edge.
+# frame_graph shows the 7.5 s frame-time graph centred along the bottom edge
+# (the top edge when edge=bottom).
 # Available values: true, false
-frame_graph=false
+frame_graph=true
+# frame_graph_opacity is the graph's background opacity in percent.
+# Available values: 0, 40, 65, 85
+frame_graph_opacity=85
 # margin is the gap from the screen edges, in pixels.
 # Available values: 0, 5, 10, 20
-margin=10
+margin=20

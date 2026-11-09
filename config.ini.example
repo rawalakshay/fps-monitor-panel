@@ -1,0 +1,43 @@
+# fps-monitor configuration (optional)
+#
+# Copy to /data/fps-monitor/config.ini on the console. The monitor never
+# creates or rewrites this file; without it every key below uses the value
+# shown. The [meta] section is required: a file without schema_version=1 is
+# ignored. Invalid values fall back to the default. The overlay reads the file
+# when it loads, so reboot and send the payload again after editing.
+
+[meta]
+schema_version=1
+
+[overlay]
+# edge chooses the screen edge the overlay is anchored to.
+# Available values: top, bottom
+edge=top
+# align anchors the overlay to the left, center, or right of that edge.
+# Available values: left, center, right
+align=left
+# font_size sets the overlay text size.
+# Available values: small, medium, large
+font_size=medium
+# detail picks how much the monitor shows: an FPS pill, one compact
+# line, or a corner panel (full is currently the same as panel).
+# Available values: minimal, compact, panel, full
+detail=panel
+# opacity is the background opacity in percent; 0 hides it.
+# Available values: 0, 40, 65, 85
+opacity=65
+# brand shows the "4aLse Benchmarks" header on the panel.
+# Available values: true, false
+brand=false
+# fps_pill also shows the FPS pill in the opposite corner.
+# Available values: true, false
+fps_pill=false
+# system shows the CPU, GPU and memory row under the charts.
+# Available values: true, false
+system=true
+# frame_graph shows the 7.5 s frame-time graph along the bottom edge.
+# Available values: true, false
+frame_graph=false
+# margin is the gap from the screen edges, in pixels.
+# Available values: 0, 5, 10, 20
+margin=10

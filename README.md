@@ -4,6 +4,15 @@ An in-game performance overlay for the PS5, delivered as a single homebrew
 payload: frame rate, frame times and CPU / GPU / memory load drawn on top of
 any running game.
 
+![fps-monitor panel over Tekken 8 at a locked 60 FPS](docs/screenshots/tekken8-fight.jpg)
+
+## Screenshots
+
+| PS5 game: Tekken 8 title screen | PS4 game: Red Dead Redemption 2 |
+| --- | --- |
+| ![Panel at 60 FPS target; LOW shown in red and the FPS chart marks frame drops in orange](docs/screenshots/tekken8-title.jpg) | ![Panel on a PS4 title running in backward compatibility at its 30 FPS target](docs/screenshots/rdr2-ps4.jpg) |
+| Frame drops below the 60 FPS target turn the LOW value red and the chart bars orange. | PS4 games are measured too; the target is detected automatically (here 30 FPS). |
+
 ## Features
 
 - **Four detail levels**
@@ -14,8 +23,8 @@ any running game.
   - `full`: currently the same as `panel` (reserved).
 - **FPS, AVG and LOW** for the current game session. A new game, or the same
   game relaunched, starts a fresh session.
-- **Charts**: a 10 s FPS chart in the panel and an optional 7.5 s frame-time
-  graph along the bottom edge of the screen.
+- **Charts**: a 10 s FPS chart and a frame-time chart in the panel, plus an
+  optional 7.5 s frame-time graph along the bottom edge of the screen.
 - **System row**: CPU usage and temperature, GPU temperature and power draw,
   and memory in use.
 - **Placement**: top or bottom edge, left / center / right, adjustable margin,
@@ -164,6 +173,7 @@ On Windows, build from a WSL shell. `.gitattributes` keeps `*.sh` files LF.
 | `source/platform/ps5/stubs/` | PS5 system library link stubs. |
 | `third_party/` | cJSON, SHA-1. |
 | `scripts/build.sh` | Build script. |
+| `docs/screenshots/` | README screenshots. |
 
 ## Credits
 

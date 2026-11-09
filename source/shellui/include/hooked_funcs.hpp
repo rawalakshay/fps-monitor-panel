@@ -8,6 +8,7 @@
 #include "shellui_types.hpp"
 #include "hook_lifecycle.hpp"
 #include <cstdint>
+#include <onion/log.h>
 
 enum GamePadButtons
 	{
@@ -297,7 +298,17 @@ void Set_Property_Invoke(MonoClass* Klass, MonoObject* Instance, const char* Pro
         return;
     }
 
-    mono_runtime_invoke(Set_Method, Instance, (void**)&Value, 0);
+    /* With no exc out-param a managed exception would unwind through the
+     * render hook's native frames and crash ShellUI: catch it, log once. */
+    MonoObject* exc = nullptr;
+    mono_runtime_invoke(Set_Method, Instance, (void**)&Value, &exc);
+    static bool logged = false;
+    if (exc != nullptr && !logged)
+    {
+        logged = true;
+        LOG_ERROR("Set_Property_Invoke: %s setter threw (exception=%p); "
+                  "further ones not logged", Property_Name, (void*)exc);
+    }
 }
 
 #define ARRAY_COUNT(arry) sizeof(arry) / sizeof(arry[0])

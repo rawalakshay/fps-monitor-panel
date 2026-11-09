@@ -98,6 +98,35 @@ void unpin(uint32_t handle) {
     mono_gchandle_free(handle);
 }
 
+/* Rendering runs several times a second and a failed create is retried every
+ * tick: log the first failure (and each new reason) once, and the recovery. */
+const char *g_apply_error = nullptr;
+/* State changes, odd = failing; only the first two are logged (flapping). */
+int g_create_flips = 0;
+
+bool apply_failed(const char *why) {
+  if (why != g_apply_error) {
+    g_apply_error = why;
+    LOG_WARN("overlay: scene not drawn: %s", why);
+  }
+  return false;
+}
+
+Widget *create_failed(const char *what, const std::string &id) {
+  if (!(g_create_flips & 1) && ++g_create_flips <= 2) {
+    LOG_WARN("overlay: widget %s: %s failed; retrying each tick", id.c_str(),
+             what);
+  }
+  return nullptr;
+}
+
+Widget *created(Widget &&w, const std::string &id) {
+  if ((g_create_flips & 1) && ++g_create_flips <= 2) {
+    LOG_INFO("overlay: widget creation recovered (%s)", id.c_str());
+  }
+  return &(g_widgets[id] = w);
+}
+
 bool same_color(const Rgba &a, const Rgba &b) {
   return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a;
 }
@@ -135,25 +164,25 @@ MonoObject *new_panel(const std::string &name, bool background) {
 Widget *create_rect(MonoObject *layer, const Rect &r) {
   MonoObject *panel = new_panel(r.id, true);
   if (!panel)
-    return nullptr;
+    return create_failed("Panel create", r.id);
   const uint32_t handle = pin(panel);
   if (!handle)
-    return nullptr;
+    return create_failed("gchandle pin", r.id);
   Widget_Append_Child(layer, panel);
   Widget w{};
   w.obj = panel;
   w.obj_handle = handle;
-  return &(g_widgets[r.id] = w);
+  return created(std::move(w), r.id);
 }
 
 Widget *create_text(MonoObject *layer, const Text &t) {
   /* Font first: a failure here must not strand a fresh cell every tick. */
   MonoObject *font = CreateUIFont(t.pt, kFontStyleBold, t.weight);
   if (!font)
-    return nullptr;
+    return create_failed("UIFont create", t.id);
   MonoObject *cell = new_panel(t.id + "_cell", false);
   if (!cell)
-    return nullptr;
+    return create_failed("cell Panel create", t.id);
   const int halign = t.align == TextAlign::Right
                          ? onion::overlay::scene::kHAlignRight
                          : onion::overlay::scene::kHAlignLeft;
@@ -164,13 +193,13 @@ Widget *create_text(MonoObject *layer, const Text &t) {
       CreateLabel(t.id.c_str(), 0.0f, 0.0f, t.text.c_str(), font, halign,
                   kAlignTop, t.color.r, t.color.g, t.color.b, t.color.a);
   if (!label)
-    return nullptr;
+    return create_failed("Label create", t.id);
   const uint32_t cell_handle = pin(cell);
   const uint32_t label_handle = pin(label);
   if (!cell_handle || !label_handle) {
     unpin(cell_handle);
     unpin(label_handle);
-    return nullptr;
+    return create_failed("gchandle pin", t.id);
   }
   MonoClass *lbl = label_class();
   Set_Property(lbl, label, "PositionType", 1);
@@ -188,7 +217,7 @@ Widget *create_text(MonoObject *layer, const Text &t) {
   w.color = t.color;
   w.pt = t.pt;
   w.weight = t.weight;
-  return &(g_widgets[t.id] = w);
+  return created(std::move(w), t.id);
 }
 
 /* Where a text's transparent cell goes: its top is the text's top (row Y +
@@ -279,10 +308,8 @@ bool ensure_layer(Layer &layer, MonoObject *root, const char *name,
   if (!panel)
     return false;
   const uint32_t handle = pin(panel);
-  if (!handle) {
-    LOG_ERROR("overlay: cannot pin %s; overlay disabled", name);
-    return false;
-  }
+  if (!handle)
+    return false; /* logged once by overlay_scene_apply */
   MonoClass *cls = panel_class();
   Set_Property(cls, panel, "X", 0.0f);
   Set_Property(cls, panel, "Y", 0.0f);
@@ -305,16 +332,24 @@ void release_layer(Layer &layer) {
 
 bool overlay_scene_apply(const Scene &scene) {
   MonoObject *root = find_root_widget();
-  if (!root || !widget_class() || !panel_class() || !label_class())
-    return false;
+  if (!root)
+    return apply_failed("Game scene has no RootWidget");
+  if (!widget_class() || !panel_class() || !label_class())
+    return apply_failed("UI2 Widget/Panel/Label class missing");
 
   /* Game scene rebuilt under us: the cached widgets hang off the old root. */
-  if (g_layer_root && g_layer_root != root)
+  if (g_layer_root && g_layer_root != root) {
+    LOG_INFO("overlay: RootWidget changed; rebuilding widgets");
     overlay_scene_remove_all();
+  }
   if (!ensure_layer(g_rect_layer, root, "id_osc_layer_rects", scene) ||
       !ensure_layer(g_text_layer, root, "id_osc_layer_texts", scene))
-    return false;
+    return apply_failed("cannot create or pin a layer panel");
   g_layer_root = root;
+  if (g_apply_error) {
+    g_apply_error = nullptr;
+    LOG_INFO("overlay: scene drawing recovered");
+  }
 
   for (auto &entry : g_widgets)
     entry.second.seen = false;

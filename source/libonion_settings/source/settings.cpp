@@ -16,7 +16,11 @@ along with this program; see the file COPYING. If not, see
 
 #include <onion/settings.hpp>
 
+#include <onion/log.h>
+
+#include <atomic>
 #include <cctype>
+#include <cerrno>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
@@ -533,10 +537,6 @@ int parse_overlay_edge(const char *s, int def) {
   return def;
 }
 
-const char *overlay_edge_name(int pos) {
-  return pos == 2 || pos == 3 ? "bottom" : "top";
-}
-
 int parse_overlay_align(const char *s, int def) {
   if (streq_ci(s, "left")) {
     return kOverlayAlignLeft;
@@ -548,16 +548,6 @@ int parse_overlay_align(const char *s, int def) {
     return kOverlayAlignRight;
   }
   return def;
-}
-
-const char *overlay_align_name(int align) {
-  if (align == kOverlayAlignLeft) {
-    return "left";
-  }
-  if (align == kOverlayAlignRight) {
-    return "right";
-  }
-  return "center";
 }
 
 bool parse_per_core_cpu(const char *s, bool def) {
@@ -872,26 +862,50 @@ bool write_path(const char *path, const std::string &body) {
   }
   int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0777);
   if (fd < 0) {
+    LOG_WARN("settings: cannot write %s: %s", path, strerror(errno));
     return false;
   }
   ssize_t n = write(fd, body.data(), body.size());
+  const int werr = errno;
   close(fd);
-  return n == static_cast<ssize_t>(body.size());
+  if (n != static_cast<ssize_t>(body.size())) {
+    LOG_WARN("settings: short write to %s (%zd/%zu): %s", path, n, body.size(),
+             n < 0 ? strerror(werr) : "truncated");
+    return false;
+  }
+  return true;
+}
+
+/* A config that exists but is rejected is otherwise silent: the host keeps
+ * defaults and the user never learns why their file did nothing. Warn once per
+ * file version (settings_load is polled whenever the mtime changes). Keyed on
+ * mtime only so the /data and /user/data views of one file warn once; atomic
+ * because the host's sampler and web threads both load. */
+void warn_config_ignored(const char *path, const char *why) {
+  static std::atomic<time_t> warned_mtime{-1};
+  struct stat st {};
+  const time_t mtime = (stat(path, &st) == 0) ? st.st_mtime : 0;
+  if (warned_mtime.exchange(mtime) == mtime) {
+    return;
+  }
+  LOG_WARN("settings: ignoring %s (%s); using defaults", path, why);
 }
 
 bool try_load_path(const char *path, Settings *out) {
   if (!path_exists(path)) {
-    return false;
+    return false; // a missing config is normal: defaults, no warning
   }
   /* IniParser is about 51 KiB.  This function also runs on daemon IPC client
      threads, where keeping it on the stack can exhaust the thread stack in
      unoptimised/debug builds. */
   std::unique_ptr<IniParser> parser(new (std::nothrow) IniParser{});
   if (!parser || !ini_parser_load(parser.get(), path)) {
+    warn_config_ignored(path, "unreadable or malformed INI");
     return false;
   }
   Settings parsed = *out;
   if (!apply_parser(parser.get(), &parsed)) {
+    warn_config_ignored(path, "missing or unsupported [meta] schema_version");
     return false;
   }
   *out = parsed;
@@ -1159,14 +1173,6 @@ time_t settings_config_newest_mtime() {
   const time_t a = path_mtime(kConfigPathPrimary);
   const time_t b = path_mtime(kConfigPathShellui);
   return a > b ? a : b;
-}
-
-bool settings_config_is_newer_than(time_t since) {
-  const time_t newest = settings_config_newest_mtime();
-  if (newest == 0) {
-    return false;
-  }
-  return newest > since;
 }
 
 } // namespace onion

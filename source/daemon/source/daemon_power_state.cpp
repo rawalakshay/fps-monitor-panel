@@ -23,6 +23,8 @@ constexpr unsigned int kStateWorking = 1000;
 std::mutex g_power_state_mutex;
 intptr_t g_state_event_flag = -1;
 int g_last_open_error = 0;
+int g_last_poll_error = 0;
+unsigned int g_last_unknown_state = 0;
 DaemonPowerState g_last_reported_state = DaemonPowerState::Unknown;
 
 const char *state_name(DaemonPowerState state) {
@@ -49,11 +51,13 @@ bool ensure_event_flag_locked() {
   if (rc < 0) {
     g_state_event_flag = -1;
     if (rc != g_last_open_error) {
-      LOG_DEBUG("rest: power state event flag unavailable rc=0x%x", rc);
+      LOG_WARN("rest: power state event flag unavailable rc=0x%x", rc);
       g_last_open_error = rc;
     }
     return false;
   }
+  if (g_last_open_error != 0)
+    LOG_INFO("rest: power state event flag open recovered");
   g_last_open_error = 0;
   LOG_DEBUG("rest: power state event flag opened handle=%lld",
             static_cast<long long>(g_state_event_flag));
@@ -69,13 +73,23 @@ DaemonPowerState read_state_locked() {
   const int rc = sceKernelPollEventFlag(g_state_event_flag, UINT64_MAX,
                                         kWaitModeOr, &pattern);
   if (rc < 0) {
-    LOG_DEBUG("rest: power state event flag poll failed rc=0x%x", rc);
-    (void)sceKernelCloseEventFlag(g_state_event_flag);
+    /* Polled once per second; log a failing rc once, not every poll. */
+    const int close_rc = sceKernelCloseEventFlag(g_state_event_flag);
+    if (rc != g_last_poll_error)
+      LOG_WARN("rest: power state event flag poll failed rc=0x%x "
+               "close_rc=0x%x",
+               rc, close_rc);
+    g_last_poll_error = rc;
     g_state_event_flag = -1;
     return DaemonPowerState::Unknown;
   }
+  if (g_last_poll_error != 0) {
+    LOG_INFO("rest: power state event flag poll recovered");
+    g_last_poll_error = 0;
+  }
 
-  switch (static_cast<unsigned int>(pattern & kStateMask)) {
+  const unsigned int raw = static_cast<unsigned int>(pattern & kStateMask);
+  switch (raw) {
   case kStateWorking:
     return DaemonPowerState::Working;
   case kStateMainOnStandby:
@@ -83,6 +97,11 @@ DaemonPowerState read_state_locked() {
   case kStateSuspendOnGoing:
     return DaemonPowerState::SuspendOnGoing;
   default:
+    if (raw != g_last_unknown_state) {
+      LOG_WARN("rest: unrecognised power state %u (pattern=0x%llx)", raw,
+               static_cast<unsigned long long>(pattern));
+      g_last_unknown_state = raw;
+    }
     return DaemonPowerState::Unknown;
   }
 }

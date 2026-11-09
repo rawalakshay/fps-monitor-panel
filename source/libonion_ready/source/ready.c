@@ -2,6 +2,8 @@
 
 #include <onion/ready.h>
 
+#include <onion/log.h>
+
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -42,12 +44,21 @@ static bool write_path(const char *path, const char *value) {
   }
   int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
   if (fd < 0) {
+    /* The host watchdog waits on this marker; a silent failure looks like the
+     * process never became ready. Runs a few times per process, not hot. */
+    LOG_ERROR("onion_ready: cannot write marker %s: %s", path, strerror(errno));
     return false;
   }
   size_t len = strlen(value);
   ssize_t written = write(fd, value, len);
+  int werr = errno;
   close(fd);
-  return written == (ssize_t)len;
+  if (written != (ssize_t)len) {
+    LOG_ERROR("onion_ready: short write marker %s (%zd/%zu): %s", path, written,
+              len, written < 0 ? strerror(werr) : "truncated");
+    return false;
+  }
+  return true;
 }
 
 static bool touch_path(const char *path) {

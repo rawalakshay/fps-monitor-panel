@@ -43,6 +43,15 @@ MonoObject* CreateUIColor(float r, float g, float b, float a)
 
     // Allocates memory for our new instance of a class.
     MonoObject* uIColorInstance = New_Object(uIColor);
+    if (uIColorInstance == nullptr)
+    {
+        // Callers skip a null colour; unboxing null would crash ShellUI.
+        static bool logged = false;
+        if (!logged)
+            LOG_ERROR("fps-monitor: UIColor %s", uIColor ? "allocation failed" : "class not found");
+        logged = true;
+        return nullptr;
+    }
     MonoObject* realInstance = (MonoObject*)mono_object_unbox(uIColorInstance);
 
     Invoke<void>(pui_img, uIColor, realInstance, ".ctor", r, g, b, a);
@@ -56,6 +65,15 @@ MonoObject* CreateUIFont(int size, int style, int weight)
 
     // Allocates memory for our new instance of a class.
     MonoObject* uIFontInstance = New_Object(uIFont);
+    if (uIFontInstance == nullptr)
+    {
+        // Callers skip a null font; unboxing null would crash ShellUI.
+        static bool logged = false;
+        if (!logged)
+            LOG_ERROR("fps-monitor: UIFont %s", uIFont ? "allocation failed" : "class not found");
+        logged = true;
+        return nullptr;
+    }
     MonoObject* realInstance = (MonoObject*)mono_object_unbox(uIFontInstance);
 
     Invoke<void>(pui_img, uIFont, realInstance, ".ctor", size, style, weight);
@@ -97,6 +115,15 @@ void Widget_Append_Child(MonoObject* widget, MonoObject* child)
     MonoClass* widgetClass = mono_class_from_name(pui_img, "Sce.PlayStation.PUI.UI2", "Widget");
     MonoMethod* appendChild = mono_class_get_method_from_name(widgetClass, "AppendChild", 1);
 
+    /* Logged before the invoke so a resulting crash leaves a trace; once only,
+     * this runs per created widget. Behaviour is unchanged. */
+    static bool logged = false;
+    if (!appendChild && !logged)
+    {
+        logged = true;
+        LOG_ERROR("Widget_Append_Child: UI2.Widget.AppendChild not found");
+    }
+
     void* args[1];
     args[0] = child;
 
@@ -120,7 +147,10 @@ uint64_t Get_Address_of_Method(MonoImage *Assembly_Image, const char *Name_Space
   }
 
   // return (uint64_t)mono_aot_get_method(Root_Domain, Method);
-  return mono_compile_method(Method);
+  const uint64_t addr = mono_compile_method(Method);
+  if (!addr)
+    LOG_ERROR("Get_Address_of_Method: failed to compile \"%s.%s\"", Class_Name, Method_Name);
+  return addr;
 }
 
 uint64_t Get_Address_of_Method(MonoImage* Assembly_Image, MonoClass* klass, const char* Method_Name, int Param_Count)

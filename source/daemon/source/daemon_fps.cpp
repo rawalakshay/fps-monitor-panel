@@ -41,6 +41,32 @@ struct CounterState {
   bool have = false;
 };
 
+/* Sources fail every tick while broken: log each failure kind once per target,
+ * and one recovery line after a logged failure. */
+struct FailureLog {
+  uint32_t seen = 0;
+  bool recovery = false;
+
+  void reset() { *this = {}; }
+
+  /* True when this failure kind has not been logged for the target yet. */
+  bool fail(unsigned kind) {
+    const uint32_t bit = 1u << (kind & 31u);
+    if (seen & bit)
+      return false;
+    seen |= bit;
+    recovery = true;
+    return true;
+  }
+
+  /* True once after a logged failure clears. */
+  bool ok() {
+    const bool r = recovery;
+    recovery = false;
+    return r;
+  }
+};
+
 enum class RateStatus : uint8_t {
   NotAttempted,
   Ok,
@@ -372,6 +398,7 @@ void *vsync_fps_sampler_thread(void *args) noexcept {
            static_cast<unsigned>(kSampleUs));
 
   onion::fps::DceSource dce;
+  FailureLog dce_log;
   CounterState scanout_st;
   std::string cached_tid;
   bool logged_active = false;
@@ -419,6 +446,7 @@ void *vsync_fps_sampler_thread(void *args) noexcept {
 
     if (tid != cached_tid) {
       scanout_st = {};
+      dce_log.reset();
       logged_active = false;
       clear_vsync_state();
       cached_tid = tid;
@@ -444,8 +472,17 @@ void *vsync_fps_sampler_thread(void *args) noexcept {
         onion::fps::DceSampleStatus::NotAttempted;
     const bool sample_ok = dce.sample(&count, &sample_status);
     RateDiag rate_diag;
-    if (sample_ok)
+    if (sample_ok) {
       rate_diag = sample_hz(scanout_st, count, &hz);
+      if (dce_log.ok())
+        LOG_INFO("fps: /dev/dce sample recovered tid=%s", tid.c_str());
+    } else if (dce_log.fail(static_cast<unsigned>(sample_status))) {
+      LOG_WARN("fps: /dev/dce sample failed tid=%s app=%d status=%s "
+               "errno=%d",
+               tid.c_str(), app_id,
+               onion::fps::dce_sample_status_name(sample_status),
+               dce.last_errno());
+    }
     const bool bus_updated = sample_ok && rate_diag.status == RateStatus::Ok;
     if (bus_updated) {
       publish_vsync_state(true, tid.c_str(), hz);
@@ -498,6 +535,11 @@ void *fps_sampler_thread(void *args) noexcept {
   int dead_ticks = 0;
   bool logged_vsync_fallback = false;
   bool had_app = false;
+  bool pid_missing = false;
+  FailureLog ring_log;
+  FailureLog global_log;
+  FailureLog bc_install_log;
+  FailureLog bc_sample_log;
   pid_t cached_pid = -1;
   std::string cached_tid;
   std::string cached_proc_name;
@@ -538,6 +580,11 @@ void *fps_sampler_thread(void *args) noexcept {
       if (had_app)
         LOG_DEBUG("fps-diag: render target cleared (no running big app)");
       had_app = false;
+      pid_missing = false;
+      ring_log.reset();
+      global_log.reset();
+      bc_install_log.reset();
+      bc_sample_log.reset();
       cached_pid = -1;
       cached_tid.clear();
       cached_proc_name.clear();
@@ -575,6 +622,10 @@ void *fps_sampler_thread(void *args) noexcept {
       const pid_t pid = onion_find_pid_ex("", false, true);
       last_pid_check = now;
       if (pid != cached_pid || tid != cached_tid) {
+        ring_log.reset();
+        global_log.reset();
+        bc_install_log.reset();
+        bc_sample_log.reset();
         ring_st = {};
         global_st = {};
         calibration.reset();
@@ -595,10 +646,15 @@ void *fps_sampler_thread(void *args) noexcept {
       cached_pid = pid;
       cached_tid = tid;
       char proc_name[64]{};
-      if (pid > 0 && sceKernelGetProcessName(pid, proc_name) >= 0)
+      const int name_rc = pid > 0 ? sceKernelGetProcessName(pid, proc_name) : -1;
+      if (name_rc >= 0)
         cached_proc_name = proc_name;
       else
         cached_proc_name = "?";
+      if (pid > 0 && name_rc < 0 && (pid != old_pid || tid != old_tid))
+        LOG_WARN("fps: sceKernelGetProcessName(pid=%d) failed rc=0x%x tid=%s",
+                 static_cast<int>(pid), static_cast<unsigned>(name_rc),
+                 tid.c_str());
       if (pid != old_pid || tid != old_tid) {
         LOG_DEBUG("fps-diag: render target tid=%s app=%d pid=%d name=%s "
                  "old_pid=%d pid_alive=%d native=%d bc=%d",
@@ -612,6 +668,11 @@ void *fps_sampler_thread(void *args) noexcept {
     }
 
     if (cached_pid <= 0) {
+      if (!pid_missing) {
+        LOG_WARN("fps: no process found for running app tid=%s app=%d",
+                 tid.c_str(), app_id);
+        pid_missing = true;
+      }
       publish_invalid(-1, nullptr);
       if (diag_due(last_diag_ns))
         LOG_DEBUG("fps-diag: render tid=%s app=%d pid=%d name=%s state=%s "
@@ -620,6 +681,11 @@ void *fps_sampler_thread(void *args) noexcept {
                  cached_proc_name.c_str(), "pid-not-found");
       usleep(kSampleUs);
       continue;
+    }
+    if (pid_missing) {
+      LOG_INFO("fps: process found for running app tid=%s pid=%d",
+               tid.c_str(), static_cast<int>(cached_pid));
+      pid_missing = false;
     }
 
     if (onion::fps::is_ps4_bc_title(tid.c_str())) {
@@ -643,6 +709,18 @@ void *fps_sampler_thread(void *args) noexcept {
               bc_status == onion::fps::BcHookStatus::GnmDriverNotFound ||
               bc_status == onion::fps::BcHookStatus::DisasmFailed)
             bc_gave_up_pid = cached_pid;
+          if (bc_status == onion::fps::BcHookStatus::Ok) {
+            if (bc_install_log.ok())
+              LOG_INFO("fps: bc-hook install recovered tid=%s pid=%d",
+                       tid.c_str(), static_cast<int>(cached_pid));
+          } else if (bc_install_log.fail(static_cast<unsigned>(bc_status))) {
+            LOG_WARN("fps: bc-hook install failed tid=%s pid=%d status=%s%s",
+                     tid.c_str(), static_cast<int>(cached_pid),
+                     onion::fps::bc_hook_status_name(bc_status),
+                     bc_gave_up_pid == cached_pid
+                         ? " (not retrying for this process)"
+                         : " (retrying)");
+          }
           LOG_DEBUG("fps-diag: bc-hook install tid=%s pid=%d status=%s "
                    "target=0x%llx counter=0x%llx len=%u",
                    tid.c_str(), static_cast<int>(cached_pid),
@@ -656,6 +734,15 @@ void *fps_sampler_thread(void *args) noexcept {
         if (bc_hook.sample(&bc_count, &bc_status)) {
           bc_rate_diag = sample_hz(bc_st, bc_count, &bc_hz);
           bc_ok = bc_rate_diag.status == RateStatus::Ok;
+          if (bc_sample_log.ok())
+            LOG_INFO("fps: bc-hook counter read recovered tid=%s pid=%d",
+                     tid.c_str(), static_cast<int>(cached_pid));
+        } else if (bc_sample_log.fail(static_cast<unsigned>(bc_status))) {
+          LOG_WARN("fps: bc-hook counter read failed tid=%s pid=%d "
+                   "status=%s counter=0x%llx",
+                   tid.c_str(), static_cast<int>(cached_pid),
+                   onion::fps::bc_hook_status_name(bc_status),
+                   static_cast<unsigned long long>(bc_hook.counter_addr()));
         }
         if (!bc_ok && bc_last_status != bc_status) {
           bc_last_status = bc_status;
@@ -745,6 +832,13 @@ void *fps_sampler_thread(void *args) noexcept {
     if (onion::fps::is_ps5_native_title(tid.c_str())) {
       if (agc.sample_ring(cached_pid, &ring_count, &ring_sample_status)) {
         ring_rate_diag = sample_hz(ring_st, ring_count, &ring_hz);
+        if (ring_log.ok())
+          LOG_INFO("fps: agc ring read recovered tid=%s pid=%d", tid.c_str(),
+                   static_cast<int>(cached_pid));
+      } else if (ring_log.fail(static_cast<unsigned>(ring_sample_status))) {
+        LOG_WARN("fps: agc ring read failed tid=%s pid=%d status=%s",
+                 tid.c_str(), static_cast<int>(cached_pid),
+                 onion::fps::agc_sample_status_name(ring_sample_status));
       }
       ring_size_diag = agc.ring_size();
       ring_idx_diag = agc.ring_write_index();
@@ -755,6 +849,13 @@ void *fps_sampler_thread(void *args) noexcept {
       if (agc.sample_global(cached_pid, &global_count,
                             &global_sample_status)) {
         global_rate_diag = sample_hz(global_st, global_count, &global_hz);
+        if (global_log.ok())
+          LOG_INFO("fps: agc global counter read recovered tid=%s pid=%d",
+                   tid.c_str(), static_cast<int>(cached_pid));
+      } else if (global_log.fail(static_cast<unsigned>(global_sample_status))) {
+        LOG_WARN("fps: agc global counter read failed tid=%s pid=%d status=%s",
+                 tid.c_str(), static_cast<int>(cached_pid),
+                 onion::fps::agc_sample_status_name(global_sample_status));
       }
       if (global_rate_diag.status == RateStatus::Ok) {
         hin.global_ok = true;

@@ -43,7 +43,8 @@ CMake variables use the `FPSMON_` prefix (`FPSMON_ROOT`, `FPSMON_OUT_BIN`, ...).
 
 | Path | What |
 | --- | --- |
-| `source/fps_monitor/source/` | Host process: FPS sampler threads + ShellUI injector/watchdog (`main.cpp`) |
+| `source/fps_monitor/source/` | Host process: FPS sampler threads + ShellUI injector/watchdog (`main.cpp`), settings web server |
+| `source/fps_monitor/web/` | Settings web app page (`index.html`), embedded into `fps-monitor.elf` |
 | `source/fps_monitor/shellui/` | Overlay module entry (`main.cpp`) + `monitor_overlay.cpp` (sampling, scene render loop) |
 | `source/shellui/` | Mono helpers, `overlay_scene.hpp` (pure layout), `overlay_scene_renderer.cpp` |
 | `source/daemon/` | `daemon_fps.cpp` FPS sampler (DCE scanout, AGC counters, PS4 Gnm detour) |
@@ -69,9 +70,16 @@ compiles them into a catalog built into `libonion_platform`. See
   It cannot detect other performance overlays.
 - The host re-injects the overlay into SceShellUI once per second (survives
   rest-mode resume / ShellUI restarts). Log: `/data/fps-monitor/fps-monitor.log`.
+  It first waits until uptime >= 120 s and a ShellUI pid has been seen for
+  10 s (`kBootSettleSec` / `kShellUiSettleSec`): injecting into a still-booting
+  ShellUI hung it.
 - Config is optional: `config.ini.example` → `/data/fps-monitor/config.ini`
   (ShellUI sees it as `/user/data/fps-monitor/config.ini`), `[overlay]` keys.
-  Read at module load; needs `[meta] schema_version=1`. The monitor never writes it.
+  Needs `[meta] schema_version=1`. The overlay re-reads it on change (mtime
+  checked once per second on the render thread), so edits apply live.
+- Settings web app: the host serves `http://<ps5-ip>:1994/` (page + `/api/config`)
+  and writes `[overlay]` keys into config.ini in place (atomic rename), including
+  `enabled` (overlay on/off). No auth; anyone on the LAN can use it.
 - Runtime markers live under `/system_tmp/fps-monitor`.
 
 ## Conventions

@@ -63,6 +63,8 @@ target_link_options(fps_monitor PRIVATE "-Wl,--gc-sections" "-Wl,--icf=safe")
 target_sources(fps_monitor PRIVATE
 	"${D_CWD}/source/main.cpp"
 	"${D_CWD}/source/embedded.c"
+	"${D_CWD}/source/web_server.cpp"
+	"${D_CWD}/source/web_page.c"
 	"${D_DAEMON}/source/daemon_fps.cpp"
 	"${D_DAEMON}/source/running_app.cpp"
 	"${D_DAEMON}/source/daemon_power_state.cpp"
@@ -70,8 +72,12 @@ target_sources(fps_monitor PRIVATE
 # .incbin is invisible to the dependency scanner; re-embed on rebuild.
 set_source_files_properties("${D_CWD}/source/embedded.c"
 	PROPERTIES OBJECT_DEPENDS "${_monitor_shellui_elf}")
+set(_web_page_html "${D_CWD}/web/index.html")
+set_source_files_properties("${D_CWD}/source/web_page.c"
+	PROPERTIES OBJECT_DEPENDS "${_web_page_html}")
 target_compile_definitions(fps_monitor PRIVATE
-	FPS_MONITOR_SHELLUI_ELF="${_monitor_shellui_elf}")
+	FPS_MONITOR_SHELLUI_ELF="${_monitor_shellui_elf}"
+	FPS_MONITOR_WEB_PAGE="${_web_page_html}")
 onion_target_debug_define(fps_monitor)
 target_include_directories(fps_monitor PRIVATE
 	"${D_DAEMON}/include"
@@ -86,5 +92,5 @@ target_include_directories(fps_monitor PRIVATE
 )
 target_link_directories(fps_monitor PUBLIC "${FPSMON_PS5_STUB_DIR}")
 add_dependencies(fps_monitor fps_monitor_shellui NineS hijacker onion_settings onion_proc onion_fps onion_platform onion_ready onion_elfldr)
-target_link_libraries(fps_monitor PUBLIC onion_fps onion_settings onion_proc onion_platform onion_ready onion_elfldr hijacker NineS SceSystemService kernel_sys)
+target_link_libraries(fps_monitor PUBLIC onion_fps onion_settings onion_proc onion_platform onion_ready onion_elfldr hijacker NineS SceSystemService SceNetCtl kernel_sys)
 onion_strip_debug(fps_monitor)

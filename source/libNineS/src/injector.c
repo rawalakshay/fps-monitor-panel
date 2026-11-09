@@ -9,7 +9,6 @@
 int attached = false;
 intptr_t remote_malloc = 0;
 intptr_t remote_pthread_create = 0;
-void* remote_pthread_join = NULL;
 SCEFunctions sce_functions = {0};
 
 /*
@@ -63,14 +62,14 @@ uint32_t get_shellcode_size()
 //
 // Init all remote function pointers needed for injection
 //
-void init_remote_function_pointers(pid_t pid)
+bool init_remote_function_pointers(pid_t pid)
 {
     if (!attached)
     {
         if (pt_attach(pid) < 0)
         {
             LOG_ERROR("Error attaching PID %d! aborting...", pid);
-            return;
+            return false;
         }
     }
 
@@ -82,8 +81,6 @@ void init_remote_function_pointers(pid_t pid)
     remote_malloc = pt_resolve(pid, nid);
     nid_encode("pthread_create", nid);
     remote_pthread_create = pt_resolve(pid, nid);
-    nid_encode("nid_pthread_join", nid);
-    remote_pthread_join = (void*) pt_resolve(pid, nid);
 
     //
     // Shellcode function pointers
@@ -92,6 +89,26 @@ void init_remote_function_pointers(pid_t pid)
     sce_functions.sceKernelDebugOutText = (void*) pt_resolve(pid, nid);
     sce_functions.pthread_create_ptr = (void*) remote_pthread_create;
 
+    //
+    // A failed resolve returns 0. The stager calls pthread_create_ptr inside
+    // the target, so a null there crashes ShellUI: refuse to inject. malloc is
+    // only used by load_remote_library/create_remote_thread, which this
+    // payload never calls, and the stager does not call sceKernelDebugOutText.
+    //
+    if (!remote_pthread_create)
+    {
+        LOG_ERROR("init_remote_function_pointers: pthread_create not found "
+                  "in pid=%d; not injecting", (int)pid);
+        return false;
+    }
+    if (!remote_malloc || !sce_functions.sceKernelDebugOutText)
+    {
+        LOG_WARN("init_remote_function_pointers: optional symbols missing "
+                 "pid=%d malloc=%#lx debugout=%#lx", (int)pid,
+                 (unsigned long)remote_malloc,
+                 (unsigned long)(uintptr_t)sce_functions.sceKernelDebugOutText);
+    }
+    return true;
 }
 
 
@@ -136,7 +153,11 @@ int inject_elf(struct proc* proc, void* elf)
     LOG_DEBUG("[+] Attached to %d! [+]", proc->pid);
     attached = true;
 
-    init_remote_function_pointers(proc->pid);
+    if (!init_remote_function_pointers(proc->pid))
+    {
+        status = false;
+        goto detach;
+    }
 
     LOG_DEBUG("[+] Loading ELF on %d...[+]", proc->pid);
     /* Crash window: remote mmap/mprotect via pt_syscall while ShellUI is stopped. */

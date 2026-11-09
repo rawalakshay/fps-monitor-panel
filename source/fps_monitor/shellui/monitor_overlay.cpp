@@ -12,6 +12,7 @@
 #include "overlay_scene_renderer.hpp"
 #include <onion/fps_sample.h>
 #include <onion/settings.hpp>
+#include <cerrno>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -21,6 +22,7 @@
 extern MonoObject* rootWidget;
 extern OverlayLayout g_overlay_layout;
 extern onion::Settings g_settings;
+void overlay_reload_settings(); /* shellui/main.cpp */
 #include "shellui_state.hpp"
 
 struct OrbisKernelTimespec {
@@ -59,15 +61,31 @@ float Usage[8] = { 0 };
 Proc_Stats Stat_Data[3072];
 thread_usages gThread_Data[2];
 
+/* Samplers run several times a second: log a source's first failure and its
+ * recovery, never every sample. flips counts state changes (odd = failing);
+ * only the first two are logged so a flapping source stays quiet. */
+static void log_source_state(bool ok, int &flips, const char *what,
+                             int code) {
+    const bool failing = (flips & 1) != 0;
+    if (ok == !failing)
+        return;
+    if (++flips > 2)
+        return;
+    if (!ok)
+        LOG_WARN("overlay: %s failed (code %d / 0x%x)", what, code, code);
+    else
+        LOG_INFO("overlay: %s recovered", what);
+}
 
 bool Get_Page_Table_Stats(int vm, int type, int* Used, int* Free, int* Total)
 {
     int _Total = 0, _Free = 0;
 
-    if (get_page_table_stats(vm, type, &_Total, &_Free) == -1) {
-        LOG_ERROR("get_page_table_stats() Failed.");
+    static int failing = 0;
+    const bool ok = get_page_table_stats(vm, type, &_Total, &_Free) != -1;
+    log_source_state(ok, failing, "get_page_table_stats", ok ? 0 : errno);
+    if (!ok)
         return false;
-    }
 
     if (Used)
         *Used = (_Total - _Free);
@@ -236,32 +254,54 @@ uint64_t monotonic_ns() {
 
 void discover_idle_thread_ids(unsigned int idle_tid[kCpuCores]) {
   int count = kMaxProcThreads;
-  if (sceKernelGetCpuUsage(reinterpret_cast<Proc_Stats*>(&Stat_Data), &count) ||
-      count <= 0)
+  const int rc =
+      sceKernelGetCpuUsage(reinterpret_cast<Proc_Stats*>(&Stat_Data), &count);
+  if (rc || count <= 0) {
+    LOG_WARN("overlay: sceKernelGetCpuUsage failed (rc=0x%x count=%d); CPU "
+             "load hidden",
+             rc, count);
     return;
+  }
 
   char thread_name[0x40];
   int core = 0;
+  int found = 0;
   for (int i = 0; i < count; i++) {
     if (!sceKernelGetThreadName(Stat_Data[i].td_tid, thread_name) &&
         sscanf(thread_name, "SceIdleCpu%d", &core) == 1 && core >= 0 &&
         core < kCpuCores) {
       idle_tid[core] = Stat_Data[i].td_tid;
+      ++found;
     }
   }
+  if (found < kCpuCores)
+    LOG_WARN("overlay: found %d of %d idle CPU threads in %d threads", found,
+             kCpuCores, count);
+}
+
+/* init_overlay_once retries every frame until it succeeds: log each distinct
+ * reason once. */
+bool init_failed(const char *why) {
+  static const char *last = nullptr;
+  if (why != last) {
+    last = why;
+    LOG_WARN("overlay: init deferred: %s", why);
+  }
+  return false;
 }
 
 bool init_overlay_once(unsigned int idle_tid[kCpuCores]) {
   rootWidget = Get_Property<MonoObject*>(pui_img, "Sce.PlayStation.PUI.UI2", "Scene",
                                          Game, "RootWidget");
   if (!rootWidget)
-    return false;
+    return init_failed("Game scene has no RootWidget");
 
   float screen_w = 0.0f;
   float screen_h = 0.0f;
   if (!resolve_root_dimensions(rootWidget, &screen_w, &screen_h))
-    return false;
+    return init_failed("RootWidget size unavailable");
 
+  LOG_INFO("overlay: init on %.0f x %.0f canvas", screen_w, screen_h);
   apply_overlay_layout(screen_w, screen_h);
   discover_idle_thread_ids(idle_tid);
   if (!g_settings.overlay_enabled)
@@ -281,11 +321,14 @@ bool init_overlay_once(unsigned int idle_tid[kCpuCores]) {
  */
 bool sample_cpu_cores(unsigned int idle_tid[kCpuCores], int& current_bank) {
   constexpr int kMaxAttempts = 4;
+  static int failing = 0;
+  int last_rc = 0;
   for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
     gThread_Data[current_bank].Thread_Count = kMaxProcThreads;
-    if (sceKernelGetCpuUsage(
-            reinterpret_cast<Proc_Stats*>(&gThread_Data[current_bank].Threads),
-            &gThread_Data[current_bank].Thread_Count))
+    last_rc = sceKernelGetCpuUsage(
+        reinterpret_cast<Proc_Stats*>(&gThread_Data[current_bank].Threads),
+        &gThread_Data[current_bank].Thread_Count);
+    if (last_rc)
       continue;
 
     Thread_Count = gThread_Data[current_bank].Thread_Count;
@@ -297,8 +340,10 @@ bool sample_cpu_cores(unsigned int idle_tid[kCpuCores], int& current_bank) {
 
     calc_usage(idle_tid, &gThread_Data[!current_bank], &gThread_Data[current_bank],
                Usage);
+    log_source_state(true, failing, "sceKernelGetCpuUsage", 0);
     return true;
   }
+  log_source_state(false, failing, "sceKernelGetCpuUsage", last_rc);
   return false;
 }
 
@@ -323,6 +368,8 @@ void sample_fps() {
                           strnlen(sample.title_id, sizeof(sample.title_id)));
   if (!g_fps_tracking || title != g_fps_title || sample.pid != g_fps_pid) {
     /* New game or relaunch: every window, chart and the target restart. */
+    LOG_INFO("overlay: FPS session %s pid=%d", title.c_str(),
+             static_cast<int>(sample.pid));
     g_fps_title = title;
     g_fps_pid = sample.pid;
     g_fps_tracking = true;
@@ -442,13 +489,21 @@ void sample_system(unsigned int idle_tid[kCpuCores], int& current_bank) {
     s.cpu_valid = false;
   }
 
+  /* code is the rc, or the out-of-range reading when rc was 0. */
+  static int cpu_temp_failing = 0;
+  static int soc_temp_failing = 0;
   int t = 0;
-  s.cpu_temp_valid = sceKernelGetCpuTemperature(&t) == 0 && t > 0 && t < 150;
+  int rc = sceKernelGetCpuTemperature(&t);
+  s.cpu_temp_valid = rc == 0 && t > 0 && t < 150;
+  log_source_state(s.cpu_temp_valid, cpu_temp_failing,
+                   "sceKernelGetCpuTemperature", rc ? rc : t);
   if (s.cpu_temp_valid)
     s.cpu_temp = t;
   t = 0;
-  s.soc_temp_valid =
-      sceKernelGetSocSensorTemperature(0, &t) == 0 && t > 0 && t < 150;
+  rc = sceKernelGetSocSensorTemperature(0, &t);
+  s.soc_temp_valid = rc == 0 && t > 0 && t < 150;
+  log_source_state(s.soc_temp_valid, soc_temp_failing,
+                   "sceKernelGetSocSensorTemperature", rc ? rc : t);
   if (s.soc_temp_valid)
     s.soc_temp = t;
 
@@ -465,14 +520,17 @@ void sample_system(unsigned int idle_tid[kCpuCores], int& current_bank) {
    * rail 0 is the GPU core. Decoding follows ps5-hwinfo, so the raw words
    * are logged once for a check on the console. */
   static bool power_logged = false;
+  static int power_failing = 0;
   constexpr int kPowerWords = 0x70 / 4;
   /* The record size is community-sourced; the buffer is oversized so a
    * larger firmware record cannot overrun the shell's stack. */
   uint32_t raw[0x200 / 4] = {};
   s.power_valid = false;
   if (sceKernelGetSocPowerConsumption) {
-    const int rc = sceKernelGetSocPowerConsumption(raw);
-    if (rc == 0) {
+    const int prc = sceKernelGetSocPowerConsumption(raw);
+    log_source_state(prc == 0, power_failing, "sceKernelGetSocPowerConsumption",
+                     prc);
+    if (prc == 0) {
       if (!power_logged) {
         power_logged = true;
         char line[kPowerWords * 11 + 1];
@@ -484,9 +542,6 @@ void sample_system(unsigned int idle_tid[kCpuCores], int& current_bank) {
       }
       s.gpu_power_w = static_cast<float>(raw[0]) / 1000.0f;
       s.power_valid = raw[0] > 0;
-    } else if (!power_logged) {
-      power_logged = true;
-      LOG_INFO("sceKernelGetSocPowerConsumption failed: 0x%x", rc);
     }
   } else if (!power_logged) {
     power_logged = true;
@@ -556,6 +611,14 @@ void OnRender_Hook(MonoObject* instance) {
       OnRender_orig(instance);
       return;
     }
+  }
+
+  /* Config edits apply here, between frames: an mtime check per second. */
+  static int64_t last_settings_check_s = 0;
+  const int64_t now_s = monotonic_seconds();
+  if (now_s != last_settings_check_s) {
+    last_settings_check_s = now_s;
+    overlay_reload_settings();
   }
 
   if (frames_until_system <= 0) {

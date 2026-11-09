@@ -142,6 +142,19 @@ inline constexpr int kOverlayAlignLeft = 0;
 inline constexpr int kOverlayAlignCenter = 1;
 inline constexpr int kOverlayAlignRight = 2;
 
+/* overlay_pos: 0/1 top edge, 2/3 bottom edge. */
+inline const char *overlay_edge_name(int pos) {
+  return pos == 2 || pos == 3 ? "bottom" : "top";
+}
+
+inline const char *overlay_align_name(int align) {
+  if (align == kOverlayAlignLeft)
+    return "left";
+  if (align == kOverlayAlignRight)
+    return "right";
+  return "center";
+}
+
 inline constexpr int kOverlayMetricCount = 6;
 inline constexpr int kOverlayMetricFps = 0;
 inline constexpr int kOverlayMetricCpu = 1;
@@ -504,12 +517,6 @@ const char *settings_last_loaded_path();
  * Use for daemon reload gating so either path's write invalidates the cache.
  */
 time_t settings_config_newest_mtime();
-
-/**
- * True if any twin path has mtime strictly greater than `since`.
- * When no config file exists, returns false (nothing newer on disk).
- */
-bool settings_config_is_newer_than(time_t since);
 
 } // namespace onion
 

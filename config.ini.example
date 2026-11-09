@@ -1,15 +1,19 @@
 # fps-monitor configuration (optional)
 #
-# Copy to /data/fps-monitor/config.ini on the console. The monitor never
-# creates or rewrites this file; without it every key below uses the value
-# shown. The [meta] section is required: a file without schema_version=1 is
-# ignored. Invalid values fall back to the default. The overlay reads the file
-# when it loads, so reboot and send the payload again after editing.
+# Copy to /data/fps-monitor/config.ini on the console, or use the settings
+# web app at http://<ps5-ip>:1994/, which edits the [overlay] keys in place
+# (creating the file if needed). Without the file every key below uses the
+# value shown. The [meta] section is required: a file without
+# schema_version=1 is ignored. Invalid values fall back to the default. The
+# overlay picks up changes within about a second; no reboot needed.
 
 [meta]
 schema_version=1
 
 [overlay]
+# enabled shows or hides the whole overlay.
+# Available values: true, false
+enabled=true
 # edge chooses the screen edge the overlay is anchored to.
 # Available values: top, bottom
 edge=top

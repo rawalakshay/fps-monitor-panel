@@ -15,6 +15,7 @@
 
 <p align="center">
   <a href="#install">Install</a> ·
+  <a href="#settings-web-app">Web app</a> ·
   <a href="#configuration">Configuration</a> ·
   <a href="#troubleshooting">Troubleshooting</a> ·
   <a href="#building-from-source">Build</a> ·
@@ -32,6 +33,7 @@
 - **PS5 and PS4 games**: PS4 titles running in backward compatibility are measured too.
 - **Nothing injected into the game**: the overlay is drawn by the system UI.
 - **Configurable**: four detail levels, four colour themes, position, size and opacity.
+- **Settings from your phone**: a built-in web app turns the overlay on or off and changes every setting live, no reboot.
 - **Survives rest mode**: the overlay reloads itself after resume.
 
 ## Screenshots
@@ -88,27 +90,83 @@ Layout illustrations; the numbers are examples.
 **Requirements:** a jailbroken PS5 that runs payloads through an ELF loader, and a way to send an ELF to it over the network (for example `nc` or any payload sender).
 
 1. Download the latest `fps-monitor` ELF from [Releases](https://github.com/rawalakshay/fps-monitor-panel/releases/latest).
-2. Send it to the console's ELF loader. A `[FPS Monitor] started` notification confirms it is running.
+2. Send it to the console's ELF loader. A `[FPS Monitor] started` notification confirms it is running, followed by `[FPS Monitor] Settings: http://<ps5-ip>:1994` with the address of the [settings web app](#settings-web-app).
 3. Start a game. The panel appears in the top-left corner.
 
 > [!NOTE]
 > The payload runs until the console is turned off. It reloads the overlay by itself after rest mode; after a full reboot, send it again. Sending it twice shows `[FPS Monitor] already running`.
+>
+> The overlay waits for the system UI to settle before it loads. When the payload starts with the console (autoload at boot), the overlay appears about two minutes after boot; sent later, it appears about 10 seconds after the payload starts.
 
 > [!WARNING]
 > Do not run it alongside another performance overlay, such as the monitor bar of a full homebrew toolkit. It cannot detect other overlays, and both would draw at once.
 
+## Settings web app
+
+The payload serves a small settings page on port **1994**. Open it from the browser on your phone (or a PC) to switch the overlay on or off and change its look while you play. Nothing to install: it is a normal web page served by the console.
+
+<div align="center">
+<table>
+  <tr>
+    <th>On a phone</th>
+    <th>Settings</th>
+    <th>Light mode</th>
+  </tr>
+  <tr>
+    <td><img src="docs/ui/web-app-phone.png" alt="Web app on a phone: console address and Connected status, the FPS overlay on/off switch, a live preview of the overlay on a sample game screen, and the Position settings" width="250"></td>
+    <td><img src="docs/ui/web-app-phone-settings.png" alt="Web app settings on a phone: detail level, colour theme swatches, text size, background opacity, and the system row and frame-time graph switches" width="250"></td>
+    <td><img src="docs/ui/web-app-phone-light.png" alt="The same phone page in light mode" width="250"></td>
+  </tr>
+</table>
+</div>
+
+On a wider screen the preview stays on the left and the settings sit on the right. The page follows the phone or PC's light or dark mode.
+
+<img src="docs/ui/web-app-desktop.png" alt="Web app on a PC: the on/off switch and preview on the left, Position and Look settings on the right, and the Save bar along the bottom" width="100%">
+
+### Open it on your phone
+
+1. **Connect your phone to the same network as the PS5** (the same home Wi-Fi or router). Mobile data, a guest Wi-Fi network or a VPN will not reach the console.
+2. **Find the console's address.** It is in the notification shown when the payload starts: `[FPS Monitor] Settings: http://192.168.1.42:1994`. You can also look it up on the PS5 under **Settings › Network › Connection Status › View Connection Status** (IPv4 Address).
+3. **Type the address into the phone's browser** (Safari, Chrome or any other), including `http://` and `:1994`, for example `http://192.168.1.42:1994`. Use `http`, not `https`. The browser may mark the page "Not secure"; that is normal for a page on your home network.
+4. **Optional: add it to your home screen** so it opens like an app next time.
+   - iPhone (Safari): tap **Share**, then **Add to Home Screen**.
+   - Android (Chrome): tap the **⋮** menu, then **Add to Home screen**.
+
+The page only loads while the payload is running. After a reboot, send the payload again first.
+
+### Using it
+
+- **FPS overlay switch** (top of the page): turns the whole overlay on or off. It applies right away; there is no Save step.
+- **Preview**: a sketch of where the overlay sits on screen and how it looks with your unsaved choices. The numbers in it are examples, not live readings.
+- **Settings**, in three groups:
+  - **Position**: screen edge, alignment along that edge, and margin.
+  - **Look**: detail level, colour theme, text size and background opacity.
+  - **Panel contents**: system row, frame-time graph (and its opacity), and the extra FPS pill.
+- **Save** (bottom bar): applies your changes. The overlay updates within about a second, even mid-game. A dot next to a setting marks a change that is not saved yet.
+- **Discard** throws away unsaved changes. **Reset all to defaults**, under **config.ini**, restores the default values (press Save to apply them).
+- **config.ini** shows the exact `[overlay]` lines the page writes.
+
+Changes are saved to `/data/fps-monitor/config.ini`. The file is created if it is missing; only the keys you change are rewritten, and your other lines and comments are kept. The same settings can be edited by hand, see [Configuration](#configuration).
+
+> [!NOTE]
+> The page has no password: anyone on your local network can open it and change the overlay settings. It only changes overlay settings; it cannot reach anything else on the console.
+
 ## Configuration
 
-Configuration is optional. Without a config file, every setting uses its default. The payload never creates or changes the file.
+Configuration is optional. Without a config file, every setting uses its default. The easiest way to change settings is the [settings web app](#settings-web-app); this section is for editing the file directly.
+
+### Editing the file by hand
 
 1. Copy [`config.ini.example`](config.ini.example) to `/data/fps-monitor/config.ini` on the console. The folder is created on first run.
 2. Keep the `[meta]` section: a file without `schema_version=1` is ignored.
 3. Edit the `[overlay]` keys.
 
-The file is read when the overlay loads, so reboot and send the payload again after editing. Invalid values fall back to the default.
+The overlay picks up changes within about a second. Invalid values fall back to the default.
 
 | Key | Values | Default | Effect |
 | --- | --- | --- | --- |
+| `enabled` | `true`, `false` | `true` | Show or hide the whole overlay. |
 | `detail` | `minimal`, `compact`, `panel`, `full` | `panel` | `minimal` is an FPS pill, `compact` a single strip, `panel` the full corner panel. `full` is currently the same as `panel`. |
 | `theme` | `classic`, `mono`, `aurora`, `vice` | `classic` | Colour palette. |
 | `edge` | `top`, `bottom` | `top` | Screen edge the overlay sits on. |
@@ -120,7 +178,7 @@ The file is read when the overlay loads, so reboot and send the payload again af
 | `frame_graph` | `true`, `false` | `true` | 7.5 s frame-time graph along the bottom edge (top edge when `edge=bottom`). |
 | `frame_graph_opacity` | `0`, `40`, `65`, `85` | `85` | Background opacity of the frame-time graph. |
 | `fps_pill` | `true`, `false` | `false` | Also show a small FPS pill in the opposite corner. |
-| `brand` | `true`, `false` | `false` | Show a "4aLse Benchmarks" header on the panel. |
+| `brand` | `true`, `false` | `false` | Show a "4aLse Benchmarks" header on the panel. File only; not in the web app. |
 
 Example:
 
@@ -143,11 +201,20 @@ The log is at `/data/fps-monitor/fps-monitor.log`.
 | Notification | Meaning |
 | --- | --- |
 | `[FPS Monitor] started` | The payload is running and will load the overlay. |
+| `[FPS Monitor] Settings: http://<ps5-ip>:1994` | The settings web app is ready at that address. |
+| `[FPS Monitor] Settings web app on port 1994` | The web app is ready, but the console's address could not be read yet. Look it up under **Settings › Network › Connection Status**. |
+| `[FPS Monitor] Settings web app: port 1994 busy, retrying` | Something else is using port 1994. The overlay still works; the web app keeps trying to start. |
 | `[FPS Monitor] already running` | A copy is already running; the new one exited. |
 | `[FPS Monitor] overlay failed to load` | The overlay could not be loaded into the system UI. The payload tries 3 times, then waits for the system UI to restart (reboot, or rest mode and back). Check the log. |
 
 - **"NO GAME DETECTED"**: no frames are being measured. This is normal in menus and loading screens.
-- **Settings are ignored**: check the path, the `[meta]` section and the values against the table above, then reboot and send the payload again.
+- **Settings are ignored**: check the path, the `[meta]` section and the values against the table above.
+- **The web app does not open on the phone**:
+  - Check that the payload is running (it must be sent again after every reboot).
+  - Check that the phone is on the same Wi-Fi as the PS5, not on mobile data, a guest network or a VPN. Some routers block devices from talking to each other ("AP isolation" or "client isolation"); turn that off in the router settings.
+  - Check the address, including `http://` and `:1994`. The console's address can change after a router restart; check it again in the PS5 network settings. A fixed address (DHCP reservation) in your router stops it changing.
+- **The page says "Can't reach the FPS Monitor on this console"**: the page loaded earlier but the payload is no longer running, or the console is in rest mode. Wake the console, send the payload again if needed, then tap **Retry**.
+- **A change does not show in the game**: wait a second after Save, then check the log for `settings reloaded`.
 - **Two overlays on screen**: another performance overlay is running. Use only one.
 
 ## How it works
@@ -178,7 +245,8 @@ Layout tests run on the host, without a console:
 
 | Path | Contents |
 | --- | --- |
-| `source/fps_monitor/source/` | Host payload: FPS sampler threads and the system UI injector / watchdog. |
+| `source/fps_monitor/source/` | Host payload: FPS sampler threads, the system UI injector / watchdog and the settings web server. |
+| `source/fps_monitor/web/` | Settings web app page (`index.html`), embedded in the payload. |
 | `source/fps_monitor/shellui/` | Overlay module entry point and `monitor_overlay.cpp` (sampling, render loop). |
 | `source/shellui/` | UI helpers, scene layout (`overlay_scene.hpp`) and renderer. |
 | `source/daemon/` | FPS sampler (`daemon_fps.cpp`): scanout, AGC counters, PS4 GNM hook. |

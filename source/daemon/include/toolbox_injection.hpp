@@ -7,7 +7,9 @@
 
 #include <mutex>
 #include <sys/types.h>
+#include <unistd.h>
 
+#include <onion/proc_query.h>
 #include <onion/ready.h>
 
 namespace onion {
@@ -19,6 +21,7 @@ enum class ToolboxInjectionResult {
   InjectFailed,
   ReadyTimeout,
   TargetChanged,
+  TargetDied, // target exited before publishing the marker (crashed)
 };
 
 struct ToolboxInjectionOutcome {
@@ -68,9 +71,17 @@ public:
       onion_ready_clear(marker_);
       return {ToolboxInjectionResult::InjectFailed, pid};
     }
-    if (!onion_ready_wait_pid(marker_, pid, timeout_ms, poll_ms)) {
-      onion_ready_clear(marker_);
-      return {ToolboxInjectionResult::ReadyTimeout, pid};
+    /* Like onion_ready_wait_pid, but stop as soon as the target dies. */
+    for (int waited = 0; !is_ready_for(pid); waited += poll_ms) {
+      if (!onion_proc_is_alive(pid)) {
+        onion_ready_clear(marker_);
+        return {ToolboxInjectionResult::TargetDied, pid};
+      }
+      if (waited >= timeout_ms) {
+        onion_ready_clear(marker_);
+        return {ToolboxInjectionResult::ReadyTimeout, pid};
+      }
+      usleep(static_cast<useconds_t>(poll_ms) * 1000);
     }
 
     const pid_t resolved_after = resolve_pid();

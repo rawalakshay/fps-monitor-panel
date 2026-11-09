@@ -277,6 +277,18 @@ BcHookStatus BcGnmHook::install(pid_t pid) {
       reset();
       return BcHookStatus::DisasmFailed;
     }
+    /* A relative branch or a [rip+disp] operand would point at the wrong
+     * memory once copied into the trampoline and crash the game: measure
+     * from scanout instead. */
+    if ((hs.flags & F_RELATIVE) ||
+        ((hs.flags & F_MODRM) && hs.modrm_mod == 0 && hs.modrm_rm == 5)) {
+      LOG_WARN("fps-bc: position-dependent instruction in prologue "
+               "@0x%llx+%u; not hooking",
+               static_cast<unsigned long long>(fn),
+               static_cast<unsigned>(hook_len));
+      reset();
+      return BcHookStatus::DisasmFailed;
+    }
     hook_len += n;
     if (hook_len > kPrologueRead) {
       LOG_WARN("fps-bc: prologue exceeds read window @0x%llx",

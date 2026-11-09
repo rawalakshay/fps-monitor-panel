@@ -24,5 +24,6 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g0 -O2")
 target_include_directories(${PROJECT_NAME}
   PUBLIC  "${D_CWD}/include"
   PRIVATE "${D_CWD}/../include"
+          "${D_CWD}/../libonion_platform/include"
 )
 

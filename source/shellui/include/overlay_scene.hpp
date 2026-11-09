@@ -71,6 +71,8 @@ inline constexpr Rgba kFill = hex(0xC9D2E0);
 
 /* Shown in the panel header when Options::brand is on. */
 inline constexpr const char *kBrandText = "4aLse Benchmarks";
+/* Author credit in the panel footer. */
+inline constexpr const char *kWatermarkText = "github.com/rawalakshay";
 
 /** Usage bars and usage values turn warn above this percentage. */
 inline constexpr float kBarWarnPct = 85.0f;
@@ -1207,6 +1209,16 @@ inline Scene build_compact(const Options &opt, const Readings &r,
 /* Panel                                                               */
 /* ------------------------------------------------------------------ */
 
+/* Footer: dim author credit, right-aligned. */
+inline float watermark(Builder &b, const Metrics &m, float x0, float iw,
+                       float y) {
+  const float wh = m.head_h;
+  y += std::round(4.0f * m.k);
+  b.text("id_osc_wm", x0, iw, y, wh, kWatermarkText, kLabel, m.head_pt,
+         kWeightLabel, TextAlign::Right, m.head_pt);
+  return y + wh;
+}
+
 inline Scene build_panel(const Options &opt, const Readings &r,
                          const Histories &h) {
   const Metrics m(opt.font_pt);
@@ -1248,6 +1260,7 @@ inline Scene build_panel(const Options &opt, const Readings &r,
     /* The system row does not need a game. */
     if (opt.show_system)
       y = system_block(b, m, x0, iw, y, r.sys);
+    y = watermark(b, m, x0, iw, y);
     return finish(opt, std::move(content), m.panel_w, y + m.pad_y);
   }
 
@@ -1371,6 +1384,7 @@ inline Scene build_panel(const Options &opt, const Readings &r,
 
   if (opt.show_system)
     y = system_block(b, m, x0, iw, y, r.sys);
+  y = watermark(b, m, x0, iw, y);
 
   return finish(opt, std::move(content), m.panel_w, y + m.pad_y);
 }

@@ -10,6 +10,7 @@
   <a href="LICENSE"><img alt="License: GPL-3.0" src="https://img.shields.io/github/license/rawalakshay/fps-monitor-panel?style=flat-square&color=5aa9e6"></a>
   <img alt="Platform: PS5" src="https://img.shields.io/badge/platform-PS5-5aa9e6?style=flat-square">
   <a href="https://github.com/rawalakshay/fps-monitor-panel/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/rawalakshay/fps-monitor-panel?style=flat-square&color=f5b13d"></a>
+  <a href="https://ko-fi.com/rawalakshay"><img alt="Support on Ko-fi" src="https://img.shields.io/badge/Ko--fi-support-ff5e5b?style=flat-square&logo=ko-fi&logoColor=white"></a>
 </p>
 
 <p align="center">
@@ -205,5 +206,6 @@ Full notices are in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 GPL-3.0. See [`LICENSE`](LICENSE). Third-party components keep their own terms.
 
 <p align="center">
-  If fps-monitor-panel is useful to you, a ⭐ on the repo helps others find it.
+  If fps-monitor-panel is useful to you, a ⭐ on the repo helps others find it.<br>
+  You can also support development on <a href="https://ko-fi.com/rawalakshay">Ko-fi</a>.
 </p>

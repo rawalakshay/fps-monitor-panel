@@ -111,6 +111,10 @@ void sony_init() {
   g_sony.uninstall =
       reinterpret_cast<UninstallFn>(sony_sym("sceAppInstUtilAppUnInstall"));
   g_sony.init = reinterpret_cast<InitFn>(sony_sym("sceAppInstUtilInitialize"));
+  LOG_INFO("fps-monitor: home tile APIs: InstallTitleDir=%d InstallAll=%d "
+           "UnInstall=%d Initialize=%d",
+           g_sony.install_title_dir != nullptr, g_sony.install_all != nullptr,
+           g_sony.uninstall != nullptr, g_sony.init != nullptr);
 }
 
 std::string fmt(const char *f, unsigned v) {
@@ -383,6 +387,8 @@ std::string add_tile() {
     (void)g_sony.init(); // idempotent
   const char *api =
       g_sony.install_title_dir ? "AppInstallTitleDir" : "AppInstallAll";
+  /* A hang inside Sony's installer leaves this as the last tile line. */
+  LOG_INFO("fps-monitor: home tile files staged and bound; calling %s", api);
   const int rc = g_sony.install_title_dir
                      ? g_sony.install_title_dir(FPSMON_TILE_ID, "/user/app/",
                                                 nullptr)
@@ -485,6 +491,7 @@ std::string remove_tile(bool retried = false) {
    * one. */
   if (!unmount_nullfs())
     return "could not unmount the tile; the shortcut was kept";
+  LOG_INFO("fps-monitor: home tile unbound; calling AppUnInstall");
   const int rc = uninstall_as_shellcore();
   /* Sony may have dropped the title already (Options > Delete on the home
    * screen leaves our marker), and its "not installed" code is unknown:
@@ -546,6 +553,9 @@ time_t uptime() {
 void *worker(void *) {
   /* Sony calls right at boot are what kBootSettleSec avoids for the inject;
    * a request this early waits too. */
+  if (const time_t up = uptime(); up < g_settle_sec)
+    LOG_INFO("fps-monitor: home tile waits %ld s for the console to settle",
+             static_cast<long>(g_settle_sec - up));
   for (time_t up; (up = uptime()) < g_settle_sec;)
     sleep(static_cast<unsigned>(g_settle_sec - up));
   pthread_mutex_lock(&g_mu);
@@ -553,9 +563,15 @@ void *worker(void *) {
     const unsigned gen = g_gen;
     const Want want = g_want;
     pthread_mutex_unlock(&g_mu);
+    LOG_INFO("fps-monitor: home tile %s",
+             want == Want::Off  ? "removing"
+             : want == Want::On ? "adding"
+                                : "restoring after start");
     std::string err = want == Want::Off  ? remove_tile()
                       : want == Want::On ? add_tile()
                                          : restore_tile();
+    if (!err.empty())
+      LOG_WARN("fps-monitor: home tile failed: %s", err.c_str());
     pthread_mutex_lock(&g_mu);
     g_done = gen;
     g_error = std::move(err);

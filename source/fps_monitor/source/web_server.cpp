@@ -6,6 +6,7 @@
 #include "web_server.hpp"
 
 #include "daemon_ops.hpp"
+#include "home_tile.hpp"
 #include "web_config.hpp"
 
 #include <onion/log.h>
@@ -38,7 +39,7 @@ namespace {
 
 namespace web = fpsmon::web;
 
-constexpr int kPort = 1994;
+constexpr int kPort = kWebServerPort;
 constexpr size_t kMaxHead = 8192;
 constexpr size_t kMaxBody = 4096;
 constexpr int kTimeoutSec = 5;
@@ -232,6 +233,24 @@ void handle_post(int fd, std::string_view body) {
   respond_json(fd, 200, config_json());
 }
 
+std::string tile_json() {
+  const HomeTileState s = home_tile_state();
+  return web::tile_json(s.on, s.busy, s.error);
+}
+
+/* Starts the change on the tile worker (Sony calls take seconds); the page
+ * polls GET /api/tile while "busy". */
+void handle_tile_post(int fd, std::string_view body) {
+  web::Updates updates;
+  const std::string err = web::parse_updates(body, updates, web::kTileKeys);
+  if (!err.empty()) {
+    respond_error(fd, 400, err);
+    return;
+  }
+  home_tile_request(updates[0].second == "true");
+  respond_json(fd, 200, tile_json());
+}
+
 void handle_client(int fd) {
   timeval tv{};
   tv.tv_sec = kTimeoutSec;
@@ -292,6 +311,15 @@ void handle_client(int fd) {
       respond_error(fd, 403, "missing X-FPSMon header");
     else
       handle_post(fd, body);
+  } else if (h.path == "/api/tile") {
+    if (h.method == "GET")
+      respond_json(fd, 200, tile_json());
+    else if (h.method != "POST")
+      respond_error(fd, 405, "method not allowed");
+    else if (!h.token)
+      respond_error(fd, 403, "missing X-FPSMon header");
+    else
+      handle_tile_post(fd, body);
   } else {
     respond_error(fd, 404, "not found");
   }

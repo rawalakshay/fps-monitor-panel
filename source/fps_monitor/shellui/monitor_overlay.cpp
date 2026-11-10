@@ -10,14 +10,21 @@
 #include "external_symbols.hpp"
 #include "overlay_scene.hpp"
 #include "overlay_scene_renderer.hpp"
+#include "pad_shortcuts.hpp"
 #include <onion/fps_sample.h>
 #include <onion/settings.hpp>
+#include <atomic>
 #include <cerrno>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <pthread.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 extern MonoObject* rootWidget;
 extern OverlayLayout g_overlay_layout;
@@ -570,6 +577,119 @@ void scene_render() {
   overlay_scene_apply(scene::build_scene(o, r, g_history));
 }
 
+/* ---- Saving a shortcut's change: POST /api/config to the host on this
+ * console, the web app's own save path. The host's FPS samplers idle while
+ * config.ini says enabled=false, so an in-memory toggle alone draws "NO GAME
+ * DETECTED"; the host reloads on that save. One worker posts the latest
+ * state, so quick presses cannot land out of order. ---- */
+constexpr int kSettingsPort = 1994; // web_server.hpp kWebServerPort
+pthread_mutex_t g_save_mu = PTHREAD_MUTEX_INITIALIZER;
+std::string g_save_body; // "" = nothing pending
+bool g_save_running = false;
+
+bool post_config(const std::string &body) {
+  const int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0)
+    return false;
+  timeval tv{};
+  tv.tv_sec = 3;
+  (void)setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+  (void)setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+  sockaddr_in addr{};
+  addr.sin_family = AF_INET;
+  addr.sin_port = htons(kSettingsPort);
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  char head[256];
+  const int n = snprintf(head, sizeof(head),
+                         "POST /api/config HTTP/1.1\r\n"
+                         "Host: 127.0.0.1\r\n"
+                         "X-FPSMon: 1\r\n"
+                         "Content-Type: application/x-www-form-urlencoded\r\n"
+                         "Content-Length: %zu\r\n"
+                         "Connection: close\r\n\r\n",
+                         body.size());
+  const std::string req = std::string(head, static_cast<size_t>(n)) + body;
+  char reply[16] = {};
+  const bool ok =
+      connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) == 0 &&
+      send(fd, req.data(), req.size(), 0) == static_cast<ssize_t>(req.size()) &&
+      recv(fd, reply, sizeof(reply) - 1, MSG_WAITALL) >= 12 &&
+      std::strncmp(reply, "HTTP/1.1 200", 12) == 0;
+  const int err = errno; // for the caller's log; close may change it
+  close(fd);
+  errno = err;
+  return ok;
+}
+
+void *save_worker(void *) {
+  pthread_mutex_lock(&g_save_mu);
+  while (!g_save_body.empty()) {
+    const std::string body = std::move(g_save_body);
+    g_save_body.clear();
+    pthread_mutex_unlock(&g_save_mu);
+    if (!post_config(body))
+      LOG_WARN("fps-monitor: shortcut not saved (POST %s to 127.0.0.1:%d "
+               "failed errno=%d)",
+               body.c_str(), kSettingsPort, errno);
+    pthread_mutex_lock(&g_save_mu);
+  }
+  g_save_running = false;
+  pthread_mutex_unlock(&g_save_mu);
+  return nullptr;
+}
+
+void save_shortcut_state() {
+  std::string body = std::string("enabled=") +
+                     (g_settings.overlay_enabled ? "true" : "false") +
+                     "&detail=" +
+                     onion::overlay_detail_name(g_settings.overlay_detail) +
+                     "&edge=" + onion::overlay_edge_name(g_settings.overlay_pos) +
+                     "&align=" +
+                     onion::overlay_align_name(g_settings.overlay_align);
+  pthread_mutex_lock(&g_save_mu);
+  g_save_body = std::move(body);
+  if (!g_save_running) {
+    pthread_t thr;
+    if (pthread_create(&thr, nullptr, save_worker, nullptr) == 0) {
+      pthread_detach(thr);
+      g_save_running = true;
+    } else {
+      g_save_body.clear();
+      LOG_WARN("fps-monitor: shortcut not saved (no thread)");
+    }
+  }
+  pthread_mutex_unlock(&g_save_mu);
+}
+
+/* Set by GetData_hook on whatever thread polls the pad; applied on the UI
+ * thread between frames (at once, for feedback), then saved. */
+std::atomic<int> g_pad_action{0};
+
+void apply_pad_action() {
+  using fpsmon::pad::Action;
+  switch (static_cast<Action>(g_pad_action.exchange(0))) {
+  case Action::None:
+    return;
+  case Action::Toggle:
+    g_settings.overlay_enabled = !g_settings.overlay_enabled;
+    break;
+  case Action::Detail:
+    g_settings.overlay_detail =
+        fpsmon::pad::next_detail(g_settings.overlay_detail);
+    break;
+  case Action::Move:
+    fpsmon::pad::next_position(g_settings.overlay_pos, g_settings.overlay_align);
+    break;
+  }
+  apply_overlay_layout();
+  LOG_INFO("fps-monitor: controller shortcut: overlay %s, detail %s, %s %s",
+           g_settings.overlay_enabled ? "on" : "off",
+           onion::overlay_detail_name(g_settings.overlay_detail),
+           onion::overlay_edge_name(g_settings.overlay_pos),
+           onion::overlay_align_name(g_settings.overlay_align));
+  save_shortcut_state();
+}
+
 } // namespace
 
 void overlay_scene_reset_state() {
@@ -620,6 +740,7 @@ void OnRender_Hook(MonoObject* instance) {
     last_settings_check_s = now_s;
     overlay_reload_settings();
   }
+  apply_pad_action();
 
   if (frames_until_system <= 0) {
     if (wants_system())
@@ -648,4 +769,18 @@ void OnRender_Hook(MonoObject* instance) {
   }
 
   OnRender_orig(instance);
+}
+
+/* Controller shortcuts (pad_shortcuts.hpp). Watches only; the buttons still
+ * reach ShellUI and the game. */
+GamePadData GetData_hook(int deviceIndex) {
+  const GamePadData d = GetData(deviceIndex);
+  static fpsmon::pad::State pads[4]; // one per controller
+  if (deviceIndex >= 0 && deviceIndex < 4) {
+    const fpsmon::pad::Action a = fpsmon::pad::update(
+        pads[deviceIndex], static_cast<unsigned>(d.Buttons), monotonic_ms());
+    if (a != fpsmon::pad::Action::None)
+      g_pad_action.store(static_cast<int>(a));
+  }
+  return d;
 }

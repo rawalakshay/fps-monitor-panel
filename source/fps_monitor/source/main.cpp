@@ -7,6 +7,7 @@
 #include "daemon_ops.hpp"
 #include "daemon_power_state.hpp"
 #include "globalconf.hpp"
+#include "home_tile.hpp"
 #include "toolbox_injection.hpp"
 #include "web_server.hpp"
 
@@ -275,8 +276,11 @@ void ensure_overlay(onion::ToolboxInject &injector) {
   const onion::ToolboxInjectionOutcome outcome = injector.inject(
       []() -> pid_t { return onion_find_pid("SceShellUI"); },
       [](pid_t target) -> bool {
-        return Inject_Toolbox(static_cast<int>(target),
-                              monitor_shellui_elf_start);
+        pthread_mutex_lock(&g_authid_mutex); // the inject swaps our authid
+        const bool ok = Inject_Toolbox(static_cast<int>(target),
+                                       monitor_shellui_elf_start);
+        pthread_mutex_unlock(&g_authid_mutex);
+        return ok;
       },
       kInjectTimeoutMs, kInjectPollMs, pid);
   if (outcome.ready()) {
@@ -370,6 +374,7 @@ int main() {
 
   LOG_INFO("fps-monitor: started pid=%d", static_cast<int>(getpid()));
   onion_notify(0, "[FPS Monitor] started");
+  home_tile_start(kBootSettleSec);
   web_server_start();
 
   onion::ToolboxInject injector(ONION_READY_FPS_MONITOR_UI);

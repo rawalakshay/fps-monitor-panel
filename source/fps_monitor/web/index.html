@@ -190,6 +190,8 @@ fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
 .lab { min-width: 0; }
 .lab .name { display: block; font-weight: 500; font-size: 15px; }
 .lab p { margin: 1px 0 0; color: var(--muted); font-size: 13px; }
+.lab p.tile-msg { margin-top: 4px; }
+.lab p.tile-msg.error { color: var(--warn); font-weight: 500; }
 .key { font-family: var(--font-mono); font-size: 11px; color: var(--muted); margin-left: 6px; font-weight: 400; white-space: nowrap; }
 .changed-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--warn); margin-left: 6px; vertical-align: 2px; }
 
@@ -384,7 +386,7 @@ fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
     return keys.map((k) => k + '=' + encodeURIComponent(String(values[k]))).join('&');
   }
 
-  async function api(body) {
+  async function request(path, body) {
     const opts = { method: body === undefined ? 'GET' : 'POST', headers: {} };
     if (body !== undefined) {
       opts.headers['X-FPSMon'] = '1';
@@ -393,7 +395,7 @@ fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
     }
     let r;
     try {
-      r = await fetch('/api/config', opts);
+      r = await fetch(path, opts);
     } catch (e) {
       setConn(false);
       throw new Error("Can't reach the FPS Monitor on this console.");
@@ -402,8 +404,9 @@ fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
     let j = {};
     try { j = await r.json(); } catch (e) { /* non-JSON body */ }
     if (!r.ok) throw new Error(j.error || 'HTTP ' + r.status);
-    return norm(j);
+    return j;
   }
+  const api = async (body) => norm(await request('/api/config', body));
 
   async function load() {
     ready = false;
@@ -417,6 +420,7 @@ fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
       draft = copy(saved);
       ready = loaded = true;
       $('banner').hidden = true;
+      tileApi().catch(() => {}); // the card stays "off" if this fails
     } catch (e) {
       $('banner').className = 'banner error';
       $('banner-text').textContent = "Can't reach the FPS Monitor on this console. Make sure fps-monitor.elf is running.";
@@ -475,6 +479,15 @@ fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
     settingsEl.appendChild(card);
   });
 
+  const tileCard = document.createElement('section');
+  tileCard.className = 'card group';
+  tileCard.innerHTML = `<h3>Home screen</h3><div class="item bool">
+    <div class="lab"><span class="name" id="tile-l">Home screen shortcut</span>
+    <p>Opens this page in the PS5 browser. After a reboot it works again once the payload is sent.</p>
+    <p class="tile-msg" id="tile-msg" role="status" hidden></p></div>
+    <button class="switch" id="t-tile" role="switch" aria-checked="false" aria-labelledby="tile-l"></button></div>`;
+  settingsEl.appendChild(tileCard);
+
   const ini = document.createElement('details');
   ini.className = 'card ini';
   ini.innerHTML = `<summary>config.ini<span>[overlay] keys set here</span></summary>
@@ -513,6 +526,49 @@ fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
     }
     busy = false; render();
   });
+  // Home screen shortcut: the console adds or removes it in the background
+  // (Sony's installer takes seconds), so poll while it reports busy.
+  let tile = { on: false, busy: false, error: '' };
+  let tileAsked = null; // the last switch press, until the console is done
+  let tileNote = '';
+  let tileTimer;
+  async function tileApi(body) {
+    const j = await request('/api/tile', body);
+    tile = { on: !!j.on, busy: !!j.busy, error: j.error || '' };
+    if (!tile.busy && tileAsked !== null) {
+      tileNote = tile.error ? '' : tile.on ? 'Added to the home screen.' : 'Removed from the home screen.';
+      tileAsked = null;
+    }
+    clearTimeout(tileTimer);
+    if (tile.busy) tileTimer = setTimeout(pollTile, 2000);
+    renderTile();
+  }
+  function pollTile() {
+    tileApi().catch(() => { tileTimer = setTimeout(pollTile, 2000); });
+  }
+  function renderTile() {
+    const want = tile.busy && tileAsked !== null ? tileAsked : tile.on;
+    const sw = $('t-tile');
+    sw.setAttribute('aria-checked', String(want));
+    sw.disabled = tile.busy;
+    const msg = $('tile-msg');
+    msg.textContent = tile.busy ? (want ? 'Adding…' : 'Removing…')
+      : tile.error ? 'Failed: ' + tile.error : tileNote;
+    msg.className = 'tile-msg' + (!tile.busy && tile.error ? ' error' : '');
+    msg.hidden = !msg.textContent;
+  }
+  $('t-tile').addEventListener('click', async () => {
+    tileAsked = !tile.on;
+    tileNote = '';
+    tile.busy = true; renderTile();
+    try {
+      await tileApi('on=' + tileAsked);
+    } catch (e) {
+      tile.busy = false; tileAsked = null; renderTile();
+      toast(e.message, true);
+    }
+  });
+
   $('discard').addEventListener('click', () => { draft = copy(saved); render(); toast('Changes discarded'); });
   $('reset').addEventListener('click', () => { draft = Object.assign(copy(DEFAULTS), { enabled: saved.enabled }); render(); });
   $('retry').addEventListener('click', load);

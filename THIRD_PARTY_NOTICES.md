@@ -13,6 +13,7 @@ third-party files listed below; their file-level notices are kept unchanged.
 | inih | `source/include/ini.h` | Ben Hoyt ([benhoyt/inih](https://github.com/benhoyt/inih)) | BSD-3-Clause (`SPDX-License-Identifier` in the file) |
 | Hacker Disassembler Engine 64 | `source/libonion_detour/include/onion/hde64.h`, `table64.h`, `source/libonion_detour/source/hde64.cpp` | Vyacheslav Patkov | Copyright notice retained in each file |
 | ELF loader and ptrace helpers | `source/libonion_elfldr/` (`elfldr.*`, `elfldr_log.h`, `pt.*`) | John Törnblom | GNU GPL-3.0-or-later, notice in each file |
+| Home-screen tile registration (nullfs bind, sce_sys staging, Sony install/uninstall) | `source/fps_monitor/source/home_tile.cpp` | ps5upload by phantomptr ([phantomptr/ps5upload](https://github.com/phantomptr/ps5upload)) | GNU GPL-3.0; ported and cut down from `payload/src/register.c` and `payload/src/webui_tile.c` |
 | Overlay, FPS sampler and `libonion_*` support libraries | `source/` | OnionHEN / LightningMods | GNU GPL-3.0 |
 | libhijacker, libNineS | `source/libhijacker/`, `source/libNineS/` | CMake headers credit ChendoChap, Specter, Znullptr (PS5SDK template) | Received under GNU GPL-3.0 with the upstream project; no file-level notice |
 | Mono runtime struct layouts | `source/shellui/include/monodef.h` | Mono project contributors | MIT (Mono runtime license) |

@@ -43,10 +43,10 @@ CMake variables use the `FPSMON_` prefix (`FPSMON_ROOT`, `FPSMON_OUT_BIN`, ...).
 
 | Path | What |
 | --- | --- |
-| `source/fps_monitor/source/` | Host process: FPS sampler threads + ShellUI injector/watchdog (`main.cpp`), settings web server |
+| `source/fps_monitor/source/` | Host process: FPS sampler threads + ShellUI injector/watchdog (`main.cpp`), settings web server, home-screen shortcut (`home_tile.cpp`; pure `home_tile_plan.hpp`; icon `../assets/tile_icon0.png` embedded by `tile_icon.c`) |
 | `source/fps_monitor/web/` | Settings web app page (`index.html`), embedded into `fps-monitor.elf` |
 | `source/fps_monitor/shellui/` | Overlay module entry (`main.cpp`) + `monitor_overlay.cpp` (sampling, scene render loop) |
-| `source/shellui/` | Mono helpers, `overlay_scene.hpp` (pure layout), `overlay_scene_renderer.cpp` |
+| `source/shellui/` | Mono helpers, `overlay_scene.hpp` (pure layout), `overlay_scene_renderer.cpp`, `pad_shortcuts.hpp` (pure controller shortcuts; `GamePad.GetData` hook in `fps_monitor/shellui/`) |
 | `source/daemon/` | `daemon_fps.cpp` FPS sampler (DCE scanout, AGC counters, PS4 Gnm detour) |
 | `source/libonion_*`, `libhijacker`, `libNineS` | Vendored support libraries |
 | `source/platform/ps5/stubs/` | PS5 system-library link stubs |
@@ -81,6 +81,12 @@ compiles them into a catalog built into `libonion_platform`. See
   and writes `[overlay]` keys into config.ini in place (atomic rename), including
   `enabled` (overlay on/off). No auth; anyone on the LAN can use it.
 - Runtime markers live under `/system_tmp/fps-monitor`.
+- Home-screen shortcut (opt-in from the web app, `GET/POST /api/tile`): app
+  `FPSM00001`, folder `/data/fps-monitor/tile/FPSM00001`, nullfs-bound at
+  `/system_ex/app/FPSM00001`, installed via `sceAppInstUtilAppInstallTitleDir`
+  or `AppInstallAll` (FW 13.x), resolved with dlsym at runtime. Marker
+  `/data/fps-monitor/tile/registered` = user wants it; at start the bind is
+  re-mounted after `kBootSettleSec`. No app.db access.
 
 ## Conventions
 

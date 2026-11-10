@@ -2,7 +2,8 @@
  *
  * Overlay-only ShellUI module for the standalone FPS monitor.
  * Trimmed boot of shellui/src/prx.cpp: resolve what the monitor bar needs,
- * hook PUI Application.Update, then keep the module alive. Drawing and
+ * hook PUI Application.Update (and GamePad.GetData for the controller
+ * shortcuts), then keep the module alive. Drawing and
  * sampling live in the shared shellui/src/prx_overlay.cpp.
  */
 #include "defs.h"
@@ -31,6 +32,7 @@ MonoObject *rootWidget = nullptr;
 MonoObject *font = nullptr;
 bool has_hv_bypass = false;
 void (*OnRender_orig)(MonoObject *instance);
+GamePadData (*GetData)(int deviceIndex);
 
 void OnRender_Hook(MonoObject *instance);
 void overlay_reload_settings();
@@ -182,6 +184,23 @@ bool install_render_hook() {
   return true;
 }
 
+/* The controller shortcuts (prx.cpp's GamePad.GetData hook). Optional: the
+ * overlay works without them. */
+void install_pad_hook() {
+  MonoImage *core = getDLLimage("Sce.PlayStation.Core.dll");
+  const uint64_t addr =
+      core ? Get_Address_of_Method(core, "Sce.PlayStation.Core.Input",
+                                   "GamePad", "GetData", 1)
+           : 0;
+  if (addr && InstallDetour(addr, reinterpret_cast<void *>(&GetData_hook),
+                            reinterpret_cast<void **>(&GetData)))
+    LOG_INFO("fps-monitor: controller shortcuts on (touchpad x3, hold L2+L3, "
+             "L2+R3)");
+  else
+    LOG_WARN("fps-monitor: GamePad.GetData hook failed; controller shortcuts "
+             "off");
+}
+
 } // namespace
 
 /* OnRender_Hook calls this about once a second on the UI thread, so
@@ -252,6 +271,7 @@ int main(int argc, char const *argv[]) {
       shellui_hooks_publish_failed();
       return -1;
     }
+    install_pad_hook();
   } // restore authid before long-running work
 
   shellui_hooks_publish_ready();

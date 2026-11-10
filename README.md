@@ -34,6 +34,8 @@
 - **Nothing injected into the game**: the overlay is drawn by the system UI.
 - **Configurable**: four detail levels, four colour themes, position, size and opacity.
 - **Settings from your phone**: a built-in web app turns the overlay on or off and changes every setting live, no reboot.
+- **Controller shortcuts**: press the touchpad three times to show or hide the overlay; hold L2 + L3 to change the detail level, L2 + R3 to move it. See [Controller shortcuts](#controller-shortcuts).
+- **Home screen tile** (optional): opens the settings page in the PS5 browser, so you can change settings without a phone. See [Home screen shortcut](#home-screen-shortcut).
 - **Survives rest mode**: the overlay reloads itself after resume.
 
 ## Screenshots
@@ -101,6 +103,21 @@ Layout illustrations; the numbers are examples.
 > [!WARNING]
 > Do not run it alongside another performance overlay, such as the monitor bar of a full homebrew toolkit. It cannot detect other overlays, and both would draw at once.
 
+## Controller shortcuts
+
+They work in a game or on the home screen:
+
+| Shortcut | Does |
+| --- | --- |
+| **Touchpad, press three times** (each press within half a second of the last) | Overlay on / off |
+| **Hold L2 + L3** for one second | Next detail level: minimal, compact, panel |
+| **Hold L2 + R3** for one second | Next position: top left, top center, top right, bottom left, bottom center, bottom right |
+
+The buttons still reach the game, so a game that uses the touchpad press (often a map or menu) sees all three presses. A shortcut's change is saved to `config.ini` like a save from the [settings web app](#settings-web-app), so it is kept after a reboot and the web app shows it when you reload the page.
+
+> [!NOTE]
+> onionHEN can use L2 + R3 to open its Toolbox. If you turned that on in onionHEN, both would react.
+
 ## Settings web app
 
 The payload serves a small settings page on port **1994**. Open it from the browser on your phone (or a PC) to switch the overlay on or off and change its look while you play. Nothing to install: it is a normal web page served by the console.
@@ -150,7 +167,17 @@ The page only loads while the payload is running. After a reboot, send the paylo
 Changes are saved to `/data/fps-monitor/config.ini`. The file is created if it is missing; only the keys you change are rewritten, and your other lines and comments are kept. The same settings can be edited by hand, see [Configuration](#configuration).
 
 > [!NOTE]
-> The page has no password: anyone on your local network can open it and change the overlay settings. It only changes overlay settings; it cannot reach anything else on the console.
+> The page has no password: anyone on your local network can open it and change the overlay settings. It only changes overlay settings and the home-screen shortcut; it cannot reach anything else on the console.
+
+### Home screen shortcut
+
+The **Home screen shortcut** switch (in the **Home screen** card) adds an **FPS-Monitor-Panel** tile to the PS5 home screen. Selecting the tile opens this page in the PS5 browser, so you can change settings from the console itself. It is off until you turn it on.
+
+- **On / off**: press the switch. The page shows *Adding…* or *Removing…* while the console installs or uninstalls the tile (a few seconds), then the result or the error.
+- **It needs the payload running**: the page the tile opens is served by the payload. After a reboot, send the payload again and the tile works again shortly after (at the earliest two minutes after the console boots). Until then the tile opens a page that does not load.
+- **Removing it** asks the console to uninstall the tile, then deletes its files (`/data/fps-monitor/tile/`, `/user/app/FPSM00001` and `/user/appmeta/FPSM00001`). If the console refuses, the payload adds the tile again and retries once. If it still refuses, the tile and its files are kept, so it keeps working, and the page shows the error.
+- **Deleted the tile on the home screen** (**Options › Delete**) while the switch is on: the switch still shows on. Press it to turn it off; that cleans up the tile's files.
+- **A greyed-out tile is left behind** (for example after its files were deleted by hand): highlight it on the home screen, press **Options** and choose **Delete**. If that fails, turn the shortcut on and then off again from the page.
 
 ## Configuration
 
@@ -215,6 +242,8 @@ The log is at `/data/fps-monitor/fps-monitor.log`.
   - Check the address, including `http://` and `:1994`. The console's address can change after a router restart; check it again in the PS5 network settings. A fixed address (DHCP reservation) in your router stops it changing.
 - **The page says "Can't reach the FPS Monitor on this console"**: the page loaded earlier but the payload is no longer running, or the console is in rest mode. Wake the console, send the payload again if needed, then tap **Retry**.
 - **A change does not show in the game**: wait a second after Save, then check the log for `settings reloaded`.
+- **Controller shortcuts do nothing**: press the touchpad three times quickly (within half a second each), or hold a combo a full second with no third button among L2 / L3 / R3. The log shows `controller shortcuts on` when they loaded and `controller shortcut: overlay ...` each time one fires; `GamePad.GetData hook failed` means this firmware does not support them (the overlay still works).
+- **A controller shortcut was undone, or the overlay shows "NO GAME DETECTED" after turning it on with the touchpad**: the change could not be saved, so the payload did not start measuring. The log shows `shortcut not saved`. Turn the overlay on from the web app instead.
 - **Two overlays on screen**: another performance overlay is running. Use only one.
 
 ## How it works
@@ -222,6 +251,8 @@ The log is at `/data/fps-monitor/fps-monitor.log`.
 - **PS5 games**: the payload reads the display scanout counters (`/dev/dce`) and the frame counters of the game's own graphics driver (`libSceAgcDriver.sprx`) from outside the game process.
 - **PS4 games**: it places a small remote hook on the game's GNM submit-and-flip call to count presented frames.
 - **Drawing**: a module loaded into SceShellUI (the system UI) draws the overlay with the system's own UI widgets. Nothing is loaded into the game.
+- **Controller shortcuts**: the same module watches the controller input the system UI reads (it does not change it) and applies a held combo between frames.
+- **Home screen tile**: the payload registers a small app, `FPSM00001`, whose only job is to open `http://127.0.0.1:1994/` in the PS5 browser.
 
 ## Building from source
 
@@ -265,6 +296,7 @@ Layout tests run on the host, without a console:
 - Overlay design from **onionHEN 0.9.0** by **LightningMods**.
 - FPS sampling approach follows **PHU Games Tools** by [ArkSama](https://github.com/ArkSama).
 - ELF loading and ptrace helpers by **John Törnblom** (GPL-3.0-or-later).
+- Home-screen shortcut registration ported from **ps5upload** by [phantomptr](https://github.com/phantomptr) (GPL-3.0).
 - **cJSON** by Dave Gamble and contributors (MIT), **SHA-1 in C** by Steve Reid (public domain), **inih** by Ben Hoyt (BSD-3-Clause), **Hacker Disassembler Engine 64** by Vyacheslav Patkov.
 
 Full notices are in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

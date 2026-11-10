@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cstddef>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -35,8 +36,14 @@ inline constexpr std::array<KeySpec, 13> kKeys = {{
     {"margin", {"0", "5", "10", "20"}, false},
 }};
 
-inline const KeySpec *find_key(std::string_view name) {
-  for (const KeySpec &k : kKeys)
+/* POST /api/tile: the home-screen shortcut on or off. */
+inline constexpr std::array<KeySpec, 1> kTileKeys = {{
+    {"on", {"true", "false"}, false},
+}};
+
+inline const KeySpec *find_key(std::string_view name,
+                               std::span<const KeySpec> keys = kKeys) {
+  for (const KeySpec &k : keys)
     if (k.name == name)
       return &k;
   return nullptr;
@@ -106,9 +113,10 @@ inline std::string json_error(std::string_view msg) {
   return "{\"error\":" + json_string(msg) + "}";
 }
 
-/* Parse a POST body into validated updates. Returns "" on success, else the
- * error message; `out` is only meaningful on success. */
-inline std::string parse_updates(std::string_view body, Updates &out) {
+/* Parse a POST body into validated updates (keys from `keys`). Returns "" on
+ * success, else the error message; `out` is only meaningful on success. */
+inline std::string parse_updates(std::string_view body, Updates &out,
+                                 std::span<const KeySpec> keys = kKeys) {
   out.clear();
   if (body.empty())
     return "empty body";
@@ -120,7 +128,7 @@ inline std::string parse_updates(std::string_view body, Updates &out) {
     if (eq == std::string_view::npos || !form_decode(pair.substr(0, eq), key) ||
         !form_decode(pair.substr(eq + 1), value))
       return "malformed body";
-    const KeySpec *spec = find_key(key);
+    const KeySpec *spec = find_key(key, keys);
     if (!spec)
       return "unknown key " + key;
     bool dup = false;
@@ -291,6 +299,13 @@ inline std::string config_json(const std::array<std::string_view, 13> &values) {
     out += kKeys[i].quoted ? json_string(values[i]) : std::string(values[i]);
   }
   return out + "}";
+}
+
+/* GET/POST /api/tile reply. */
+inline std::string tile_json(bool on, bool busy, std::string_view error) {
+  return std::string("{\"on\":") + (on ? "true" : "false") +
+         ",\"busy\":" + (busy ? "true" : "false") +
+         ",\"error\":" + json_string(error) + "}";
 }
 
 } // namespace fpsmon::web

@@ -65,6 +65,8 @@ target_sources(fps_monitor PRIVATE
 	"${D_CWD}/source/embedded.c"
 	"${D_CWD}/source/web_server.cpp"
 	"${D_CWD}/source/web_page.c"
+	"${D_CWD}/source/home_tile.cpp"
+	"${D_CWD}/source/tile_icon.c"
 	"${D_DAEMON}/source/daemon_fps.cpp"
 	"${D_DAEMON}/source/running_app.cpp"
 	"${D_DAEMON}/source/daemon_power_state.cpp"
@@ -75,9 +77,13 @@ set_source_files_properties("${D_CWD}/source/embedded.c"
 set(_web_page_html "${D_CWD}/web/index.html")
 set_source_files_properties("${D_CWD}/source/web_page.c"
 	PROPERTIES OBJECT_DEPENDS "${_web_page_html}")
+set(_tile_icon_png "${D_CWD}/assets/tile_icon0.png")
+set_source_files_properties("${D_CWD}/source/tile_icon.c"
+	PROPERTIES OBJECT_DEPENDS "${_tile_icon_png}")
 target_compile_definitions(fps_monitor PRIVATE
 	FPS_MONITOR_SHELLUI_ELF="${_monitor_shellui_elf}"
-	FPS_MONITOR_WEB_PAGE="${_web_page_html}")
+	FPS_MONITOR_WEB_PAGE="${_web_page_html}"
+	FPS_MONITOR_TILE_ICON="${_tile_icon_png}")
 onion_target_debug_define(fps_monitor)
 target_include_directories(fps_monitor PRIVATE
 	"${D_DAEMON}/include"

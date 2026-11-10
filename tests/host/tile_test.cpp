@@ -24,6 +24,13 @@ int main() {
   static_assert(!tile::install_ok(-1));
   static_assert(!tile::install_ok(static_cast<int>(0x80990015u)));
 
+  /* payload start: restore, add on first run, respect the user's off */
+  using tile::Start;
+  static_assert(tile::start_action(true, false) == Start::Restore);
+  static_assert(tile::start_action(true, true) == Start::Restore);
+  static_assert(tile::start_action(false, false) == Start::Add);
+  static_assert(tile::start_action(false, true) == Start::Nothing);
+
   /* startup with the marker present */
   using tile::Startup;
   static_assert(tile::startup_plan(false, false) == Startup::Remount);

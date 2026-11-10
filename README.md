@@ -35,7 +35,7 @@
 - **Configurable**: four detail levels, four colour themes, position, size and opacity.
 - **Settings from your phone**: a built-in web app turns the overlay on or off and changes every setting live, no reboot.
 - **Controller shortcuts**: press the touchpad three times to show or hide the overlay; hold L2 + L3 to change the detail level, L2 + R3 to move it. See [Controller shortcuts](#controller-shortcuts).
-- **Home screen tile** (optional): opens the settings page in the PS5 browser, so you can change settings without a phone. See [Home screen shortcut](#home-screen-shortcut).
+- **Home screen tile**: added automatically to the Media tab; opens the settings page in the PS5 browser, so you can change settings without a phone. See [Home screen shortcut](#home-screen-shortcut).
 - **Survives rest mode**: the overlay reloads itself after resume.
 
 ## Screenshots
@@ -171,11 +171,25 @@ Changes are saved to `/data/fps-monitor/config.ini`. The file is created if it i
 
 ### Home screen shortcut
 
-The **Home screen shortcut** switch (in the **Home screen** card) adds an **FPS-Monitor-Panel** tile to the PS5 home screen. Selecting the tile opens this page in the PS5 browser, so you can change settings from the console itself. It is off until you turn it on.
+The payload adds an **FPS-Monitor-Panel** tile to the PS5 home screen the first time it runs (at the earliest two minutes after the console boots). It sits in the **Media** tab. Selecting it and pressing **Start** opens this page in the PS5 browser, so you can change settings from the console itself.
+
+<div align="center">
+<table>
+  <tr>
+    <th>The tile in the Media tab</th>
+    <th>The settings page it opens</th>
+  </tr>
+  <tr>
+    <td><img src="docs/ui/home-tile.jpg" alt="PS5 home screen, Media tab: the FPS-Monitor-Panel tile with its bar-chart icon is selected, with its name and a Start button below" width="420"></td>
+    <td><img src="docs/ui/home-tile-browser.png" alt="The settings web app open in the PS5 browser at 127.0.0.1: FPS overlay switch on, live preview, and the Position settings" width="420"></td>
+  </tr>
+</table>
+</div>
+ The **Home screen shortcut** switch (in the **Home screen** card) turns it on or off; once you turn it off, it stays off, even after the payload is sent again.
 
 - **On / off**: press the switch. The page shows *Adding…* or *Removing…* while the console installs or uninstalls the tile (a few seconds), then the result or the error.
 - **It needs the payload running**: the page the tile opens is served by the payload. After a reboot, send the payload again and the tile works again shortly after (at the earliest two minutes after the console boots). Until then the tile opens a page that does not load.
-- **Removing it** asks the console to uninstall the tile, then deletes its files (`/data/fps-monitor/tile/`, `/user/app/FPSM00001` and `/user/appmeta/FPSM00001`). If the console refuses, the payload adds the tile again and retries once. If it still refuses, the tile and its files are kept, so it keeps working, and the page shows the error.
+- **Removing it** asks the console to uninstall the tile, then deletes its files (`/data/fps-monitor/tile/FPSM00001`, `/user/app/FPSM00001` and `/user/appmeta/FPSM00001`). If the console refuses, the payload adds the tile again and retries once. If it still refuses, the tile and its files are kept, so it keeps working, and the page shows the error.
 - **Deleted the tile on the home screen** (**Options › Delete**) while the switch is on: the switch still shows on. Press it to turn it off; that cleans up the tile's files.
 - **A greyed-out tile is left behind** (for example after its files were deleted by hand): highlight it on the home screen, press **Options** and choose **Delete**. If that fails, turn the shortcut on and then off again from the page.
 

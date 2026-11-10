@@ -1,4 +1,5 @@
-/* Opt-in PS5 home-screen shortcut: a registered app, FPSM00001, whose
+/* PS5 home-screen shortcut, added at payload start unless the user turned it
+ * off: a registered app, FPSM00001, whose
  * sce_sys/param.json deeplinkUri opens the PS5 browser on the settings web
  * app (port 1994). Its folder is /data/fps-monitor/tile/FPSM00001/
  * (sce_sys/param.json, sce_sys/icon0.png, a placeholder eboot.bin).
@@ -53,6 +54,9 @@ namespace {
 /* Written after an add, deleted after a remove: the user wants the tile.
  * Outside the tile folder, which the nullfs exposes to Sony. */
 constexpr const char *kMarker = TILE_PARENT "/registered";
+/* Written when the user turns the tile off, deleted when they turn it on:
+ * without it, every payload start adds the tile. */
+constexpr const char *kOptOut = TILE_PARENT "/off";
 constexpr const char *kSystemEx = "/system_ex/app/" FPSMON_TILE_ID;
 /* ps5upload's tile tracker: mount.lnk under another name, because
  * ShadowMount+ releases the bind of any /user/app/<id>/mount.lnk within
@@ -90,8 +94,10 @@ struct Sony {
 Sony g_sony{};
 pthread_once_t g_sony_once = PTHREAD_ONCE_INIT;
 
-void *sony_sym(const char *name) {
-  void *p = dlsym(RTLD_DEFAULT, name);
+/* Looked up in the dlopen handle: on FW 13.60 RTLD_DEFAULT found none of
+ * them (the SDK's hello_dlfcn and ShadowMount+ use the handle too). */
+void *sony_sym(void *lib, const char *name) {
+  void *p = dlsym(lib, name);
   if (!p)
     LOG_DEBUG("fps-monitor: home tile %s not exported on this firmware", name);
   return p;
@@ -99,18 +105,21 @@ void *sony_sym(const char *name) {
 
 void sony_init() {
   dlerror();
-  if (!dlopen(kAppInstUtil, RTLD_LAZY)) { // kept loaded for the process
+  void *lib = dlopen(kAppInstUtil, RTLD_LAZY); // kept loaded for the process
+  if (!lib) {
     const char *e = dlerror();
     LOG_WARN("fps-monitor: home tile dlopen %s failed: %s", kAppInstUtil,
              e ? e : "unknown");
+    lib = RTLD_DEFAULT;
   }
   g_sony.install_title_dir = reinterpret_cast<InstallTitleDirFn>(
-      sony_sym("sceAppInstUtilAppInstallTitleDir"));
-  g_sony.install_all =
-      reinterpret_cast<InstallAllFn>(sony_sym("sceAppInstUtilAppInstallAll"));
-  g_sony.uninstall =
-      reinterpret_cast<UninstallFn>(sony_sym("sceAppInstUtilAppUnInstall"));
-  g_sony.init = reinterpret_cast<InitFn>(sony_sym("sceAppInstUtilInitialize"));
+      sony_sym(lib, "sceAppInstUtilAppInstallTitleDir"));
+  g_sony.install_all = reinterpret_cast<InstallAllFn>(
+      sony_sym(lib, "sceAppInstUtilAppInstallAll"));
+  g_sony.uninstall = reinterpret_cast<UninstallFn>(
+      sony_sym(lib, "sceAppInstUtilAppUnInstall"));
+  g_sony.init =
+      reinterpret_cast<InitFn>(sony_sym(lib, "sceAppInstUtilInitialize"));
   LOG_INFO("fps-monitor: home tile APIs: InstallTitleDir=%d InstallAll=%d "
            "UnInstall=%d Initialize=%d",
            g_sony.install_title_dir != nullptr, g_sony.install_all != nullptr,
@@ -605,16 +614,45 @@ void request(Want want) {
 
 void home_tile_start(time_t boot_settle_sec) {
   g_settle_sec = boot_settle_sec;
-  if (access(kMarker, F_OK) == 0)
+  switch (fpsmon::tile::start_action(access(kMarker, F_OK) == 0,
+                                     access(kOptOut, F_OK) == 0)) {
+  case fpsmon::tile::Start::Restore:
     request(Want::Restore);
+    break;
+  case fpsmon::tile::Start::Add:
+    LOG_INFO("fps-monitor: home tile not turned off by the user; adding it");
+    request(Want::On);
+    break;
+  case fpsmon::tile::Start::Nothing:
+    break;
+  }
 }
 
-void home_tile_request(bool on) { request(on ? Want::On : Want::Off); }
+void home_tile_request(bool on) {
+  /* The user's choice, kept across payload starts. */
+  if (on) {
+    if (unlink(kOptOut) != 0 && errno != ENOENT)
+      LOG_WARN("fps-monitor: home tile delete %s failed errno=%d", kOptOut,
+               errno);
+  } else {
+    const int fd = mkdir_p(TILE_PARENT, 0755)
+                       ? open(kOptOut, O_WRONLY | O_CREAT | O_TRUNC, 0666)
+                       : -1;
+    if (fd >= 0)
+      close(fd);
+    else // the tile comes back at the next payload start
+      LOG_WARN("fps-monitor: home tile write %s failed errno=%d", kOptOut,
+               errno);
+  }
+  request(on ? Want::On : Want::Off);
+}
 
 HomeTileState home_tile_state() {
-  const bool on = access(kMarker, F_OK) == 0;
+  const bool installed = access(kMarker, F_OK) == 0;
   pthread_mutex_lock(&g_mu);
-  HomeTileState s{on, g_busy, g_error};
+  /* While busy, the state being worked toward: the page's "Adding…" or
+   * "Removing…" (an add at payload start has no marker yet). */
+  HomeTileState s{g_busy ? g_want != Want::Off : installed, g_busy, g_error};
   pthread_mutex_unlock(&g_mu);
   return s;
 }

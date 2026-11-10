@@ -26,6 +26,16 @@ constexpr bool install_ok(int rc) {
   return rc == 0 || static_cast<uint32_t>(rc) == 0x80990002u;
 }
 
+/* At payload start: restore the tile the user has (marker), add it on first
+ * run, and leave it off once the user turned it off (opt-out file). */
+enum class Start { Restore, Add, Nothing };
+
+constexpr Start start_action(bool marker, bool opted_out) {
+  if (marker)
+    return Start::Restore;
+  return opted_out ? Start::Nothing : Start::Add;
+}
+
 /* At payload start with the marker present. The nullfs bind does not survive
  * a reboot, but Sony's registration does, so re-mounting is enough (no Sony
  * call). A changed file means the staged sce_sys copies are stale: register

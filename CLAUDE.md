@@ -81,12 +81,15 @@ compiles them into a catalog built into `libonion_platform`. See
   and writes `[overlay]` keys into config.ini in place (atomic rename), including
   `enabled` (overlay on/off). No auth; anyone on the LAN can use it.
 - Runtime markers live under `/system_tmp/fps-monitor`.
-- Home-screen shortcut (opt-in from the web app, `GET/POST /api/tile`): app
-  `FPSM00001`, folder `/data/fps-monitor/tile/FPSM00001`, nullfs-bound at
+- Home-screen shortcut (added at payload start; on/off from the web app,
+  `GET/POST /api/tile`): app `FPSM00001`, folder
+  `/data/fps-monitor/tile/FPSM00001`, nullfs-bound at
   `/system_ex/app/FPSM00001`, installed via `sceAppInstUtilAppInstallTitleDir`
-  or `AppInstallAll` (FW 13.x), resolved with dlsym at runtime. Marker
-  `/data/fps-monitor/tile/registered` = user wants it; at start the bind is
-  re-mounted after `kBootSettleSec`. No app.db access.
+  or `AppInstallAll` (FW 13.x; 13.60 has only this), resolved with dlsym on
+  the dlopen handle (RTLD_DEFAULT finds nothing on 13.60). Marker
+  `/data/fps-monitor/tile/registered` = installed; `.../tile/off` = the user
+  turned it off, so it is not added again. At start, after `kBootSettleSec`,
+  the bind is re-mounted or the tile added. No app.db access.
 
 ## Conventions
 

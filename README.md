@@ -185,13 +185,15 @@ The payload adds an **FPS-Monitor-Panel** tile to the PS5 home screen the first 
   </tr>
 </table>
 </div>
- The **Home screen shortcut** switch (in the **Home screen** card) turns it on or off; once you turn it off, it stays off, even after the payload is sent again.
+
+The **Home screen shortcut** switch (in the **Home screen** card) turns it on or off; once you turn it off, it stays off, even after the payload is sent again. Tested on firmware 13.60.
 
 - **On / off**: press the switch. The page shows *Adding…* or *Removing…* while the console installs or uninstalls the tile (a few seconds), then the result or the error.
 - **It needs the payload running**: the page the tile opens is served by the payload. After a reboot, send the payload again and the tile works again shortly after (at the earliest two minutes after the console boots). Until then the tile opens a page that does not load.
 - **Removing it** asks the console to uninstall the tile, then deletes its files (`/data/fps-monitor/tile/FPSM00001`, `/user/app/FPSM00001` and `/user/appmeta/FPSM00001`). If the console refuses, the payload adds the tile again and retries once. If it still refuses, the tile and its files are kept, so it keeps working, and the page shows the error.
 - **Deleted the tile on the home screen** (**Options › Delete**) while the switch is on: the switch still shows on. Press it to turn it off; that cleans up the tile's files.
 - **A greyed-out tile is left behind** (for example after its files were deleted by hand): highlight it on the home screen, press **Options** and choose **Delete**. If that fails, turn the shortcut on and then off again from the page.
+- **Other apps may appear too (firmware 13.x)**: on 13.x the console's only install call registers every app folder under `/user/app` it does not know yet, so leftover homebrew folders there show up on the home screen along with the tile.
 
 ## Configuration
 
@@ -259,6 +261,10 @@ The log is at `/data/fps-monitor/fps-monitor.log`.
 - **Controller shortcuts do nothing**: press the touchpad three times quickly (within half a second each), or hold a combo a full second with no third button among L2 / L3 / R3. The log shows `controller shortcuts on` when they loaded and `controller shortcut: overlay ...` each time one fires; `GamePad.GetData hook failed` means this firmware does not support them (the overlay still works).
 - **A controller shortcut was undone, or the overlay shows "NO GAME DETECTED" after turning it on with the touchpad**: the change could not be saved, so the payload did not start measuring. The log shows `shortcut not saved`. Turn the overlay on from the web app instead.
 - **Two overlays on screen**: another performance overlay is running. Use only one.
+- **The home-screen tile does not appear**:
+  - Wait: it is added at the earliest two minutes after the console boots. Look in the **Media** tab, not Games.
+  - Open the web app: the **Home screen** card shows *Adding…*, the error, or an off switch. If you turned it off once, it stays off until you turn it on there.
+  - Check the log for `home tile` lines: `added via ... rc=0` means it is registered; `home tile failed: ...` gives the reason; `home tile APIs: ...` with all zeros means this firmware does not offer the install call.
 
 ## How it works
 
@@ -279,7 +285,7 @@ export PS5_PAYLOAD_SDK=/opt/ps5-payload-sdk
 
 The output is `build/bin/fps-monitor.elf`, the only file to send. The system UI module is built first and embedded in it.
 
-Layout tests run on the host, without a console:
+Host tests (overlay layout, settings web app helpers, home-screen tile and controller shortcut logic) run without a console:
 
 ```sh
 ./scripts/test.sh           # add --render to write PNG previews
@@ -290,15 +296,15 @@ Layout tests run on the host, without a console:
 
 | Path | Contents |
 | --- | --- |
-| `source/fps_monitor/source/` | Host payload: FPS sampler threads, the system UI injector / watchdog and the settings web server. |
+| `source/fps_monitor/source/` | Host payload: FPS sampler threads, the system UI injector / watchdog, the settings web server and the home-screen tile (`home_tile.cpp`; icon in `../assets/`). |
 | `source/fps_monitor/web/` | Settings web app page (`index.html`), embedded in the payload. |
-| `source/fps_monitor/shellui/` | Overlay module entry point and `monitor_overlay.cpp` (sampling, render loop). |
-| `source/shellui/` | UI helpers, scene layout (`overlay_scene.hpp`) and renderer. |
+| `source/fps_monitor/shellui/` | Overlay module entry point and `monitor_overlay.cpp` (sampling, render loop, controller shortcuts). |
+| `source/shellui/` | UI helpers, scene layout (`overlay_scene.hpp`), renderer and controller shortcut logic (`pad_shortcuts.hpp`). |
 | `source/daemon/` | FPS sampler (`daemon_fps.cpp`): scanout, AGC counters, PS4 GNM hook. |
 | `source/libonion_*`, `libhijacker`, `libNineS` | Vendored support libraries: process access, injection, settings, logging, notifications. |
 | `source/i18n/` | Notification strings. |
 | `source/platform/ps5/stubs/` | PS5 system library link stubs. |
-| `tests/host/` | Host-side layout tests and renders. |
+| `tests/host/` | Host-side tests: overlay layout and renders, web app helpers, home-screen tile, controller shortcuts. |
 | `third_party/` | cJSON, SHA-1. |
 | `docs/` | README screenshots and illustrations. |
 
